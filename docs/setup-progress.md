@@ -95,7 +95,8 @@ Repository -> Settings -> Secrets and variables -> Actions -> New repository sec
 첫 실행 결과:
 
 ```text
-아직 실행 전
+아직 실행 전.
+Cloud Shell 기존 스크립트에서 timeout exit code 124가 발생했으므로 OCI API silent block/응답 지연이 풀릴 때까지 대기 후 실행 예정.
 ```
 
 ## 6. 주기 실행 확인
@@ -125,4 +126,5 @@ ssh -i $HOME\.ssh\oci_a1 ubuntu@<public-ip>
 
 ```text
 2026-04-29: setup-progress.md 생성
+2026-04-29: Cloud Shell 기존 스크립트에서 exit code 124 timeout 발생. 첫 GitHub Actions 수동 실행은 대기 후 진행.
 ```
