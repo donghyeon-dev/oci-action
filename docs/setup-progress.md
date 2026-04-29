@@ -6,18 +6,20 @@
 
 ## 1. OCI API Key 준비
 
-- [ ] OCI Console 접속
-- [ ] 우측 상단 프로필 -> My profile 이동
-- [ ] Resources -> API keys -> Add API key
-- [ ] Generate API key pair 선택
-- [ ] private key `.pem` 파일 다운로드
-- [ ] API key 추가 완료
-- [ ] Configuration File Preview에서 아래 값 확보
-- [ ] `user` OCID 확보
-- [ ] `fingerprint` 확보
-- [ ] `tenancy` OCID 확보
-- [ ] `region` 확인, 예: `ap-chuncheon-1`
-- [ ] `.pem` 파일 전체 내용을 개인 보관용 메모에 복사
+- [x] OCI Console 접속
+- [x] 우측 상단 프로필 -> My profile 이동
+- [x] Resources -> API keys -> Add API key
+- [x] Generate API key pair 선택
+- [x] private key `.pem` 파일 다운로드
+- [x] API key 추가 완료
+- [x] Configuration File Preview에서 아래 값 확보
+- [x] `user` OCID 확보
+- [x] `fingerprint` 확보
+- [x] `tenancy` OCID 확보
+- [x] `region` 확인, 예: `ap-chuncheon-1`
+- [x] `.pem` 파일 전체 내용을 개인 보관용 메모에 복사
+
+상태: 사용자가 OCI API key 관련 값은 모두 별도로 보관 중이라고 확인함.
 
 ## 2. OCI 리소스 값 준비
 
@@ -31,6 +33,21 @@
 - [ ] `OCI_AVAILABILITY_DOMAIN` 확보, 예: `nHas:AP-CHUNCHEON-1-AD-1`
 - [ ] SSH public key 준비
 - [ ] `OCI_SSH_PUBLIC_KEY` 확보
+
+Cloud Shell에서 사용하던 스크립트 기준 대응 관계:
+
+| 기존 shell 변수 | GitHub Secret | 비고 |
+| --- | --- | --- |
+| `COMPARTMENT_ID` | `OCI_COMPARTMENT_ID` | root compartment라면 tenancy OCID와 동일할 수 있음. |
+| `SUBNET_ID` | `OCI_SUBNET_ID` | 기존 Cloud Shell 스크립트에서 쓰던 subnet OCID를 그대로 사용. |
+| `IMAGE_ID` | `OCI_IMAGE_ID` | 기존 Ubuntu ARM image OCID를 그대로 사용. |
+| `AVAILABILITY_DOMAIN` | `OCI_AVAILABILITY_DOMAIN` | 예: `nHas:AP-CHUNCHEON-1-AD-1`. |
+| `SSH_PUBLIC_KEY` | `OCI_SSH_PUBLIC_KEY` | 한 줄짜리 public key 전체. |
+| `DISPLAY_NAME` | workflow 내부 `dh-server-a1` | 현재 workflow는 고정값 사용. 필요하면 Secret으로 분리 가능. |
+| `OCPUS` | workflow 내부 `1` | Always Free 안전값으로 고정. |
+| `MEMORY` | workflow 내부 `6` | Always Free 안전값으로 고정. |
+
+확인 결과: 사용자가 보낸 스크립트는 값이 비워져 있어 실제 OCID 값 자체는 유추할 수 없음. 다만 기존 Cloud Shell에서 실제로 돌리던 원본 스크립트나 OCI CLI config/history에 값이 남아 있다면 위 대응 관계대로 GitHub Secrets에 옮기면 됨.
 
 ## 3. Telegram 알림 준비
 
@@ -103,4 +120,3 @@ ssh -i $HOME\.ssh\oci_a1 ubuntu@<public-ip>
 ```text
 2026-04-29: setup-progress.md 생성
 ```
-
