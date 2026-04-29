@@ -1,9 +1,6 @@
 name: Launch OCI A1 Instance
 
 on:
-  schedule:
-    # Every 15 minutes. GitHub schedules use UTC.
-    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 permissions:
