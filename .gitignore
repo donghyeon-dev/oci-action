@@ -1,0 +1,14 @@
+# Local secrets and OCI credentials
+*.pem
+*.key
+.env
+.env.*
+.oci/
+oci_cli_rc
+config
+
+# Logs and local tooling
+*.log
+.omx/
+.DS_Store
+Thumbs.db

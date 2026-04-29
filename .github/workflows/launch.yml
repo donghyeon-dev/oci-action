@@ -1,0 +1,96 @@
+name: Launch OCI A1 Instance
+
+on:
+  schedule:
+    # Every 15 minutes. GitHub schedules use UTC.
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: oci-a1-launch
+  cancel-in-progress: false
+
+jobs:
+  launch:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    env:
+      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+
+    steps:
+      - name: Check existing A1 instance
+        id: check
+        uses: oracle-actions/run-oci-cli-command@v1.3.2
+        with:
+          command: >-
+            compute instance list
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_ID }}
+          query: "data[?shape=='VM.Standard.A1.Flex' && \"lifecycle-state\"!='TERMINATED' && \"lifecycle-state\"!='TERMINATING'] | length(@)"
+
+      - name: Stop if A1 instance already exists
+        if: steps.check.outputs.raw_output != '0' && steps.check.outputs.raw_output != ''
+        run: |
+          echo "A running A1 instance already exists. Skipping launch."
+          curl -fsS -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            --data-urlencode text="OCI A1 instance is already running. Disable this workflow if it is no longer needed."
+
+      - name: Disable workflow if A1 instance already exists
+        if: steps.check.outputs.raw_output != '0' && steps.check.outputs.raw_output != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow disable launch.yml -R ${{ github.repository }}
+
+      - name: Try launch A1 instance
+        id: launch
+        if: steps.check.outputs.raw_output == '0' || steps.check.outputs.raw_output == ''
+        continue-on-error: true
+        uses: oracle-actions/run-oci-cli-command@v1.3.2
+        with:
+          command: >-
+            compute instance launch
+            --availability-domain "${{ secrets.OCI_AVAILABILITY_DOMAIN }}"
+            --compartment-id ${{ secrets.OCI_COMPARTMENT_ID }}
+            --shape VM.Standard.A1.Flex
+            --shape-config '{"ocpus":1,"memoryInGBs":6}'
+            --image-id ${{ secrets.OCI_IMAGE_ID }}
+            --subnet-id ${{ secrets.OCI_SUBNET_ID }}
+            --display-name dh-server-a1
+            --assign-public-ip true
+            --metadata '{"ssh_authorized_keys":"${{ secrets.OCI_SSH_PUBLIC_KEY }}"}'
+          silent: false
+
+      - name: Notify on launch success
+        if: steps.launch.outcome == 'success'
+        run: |
+          curl -fsS -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            --data-urlencode text="OCI A1 instance launched. Check OCI Console and disable any duplicate automation."
+
+      - name: Disable workflow on launch success
+        if: steps.launch.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow disable launch.yml -R ${{ github.repository }}
+
+      - name: Disable workflow on OCI limit exceeded
+        if: contains(steps.launch.outputs.output, 'LimitExceeded') || contains(steps.launch.outputs.raw_output, 'LimitExceeded')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow disable launch.yml -R ${{ github.repository }}
+          curl -fsS -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            --data-urlencode text="OCI A1 workflow disabled: LimitExceeded. Check existing OCI resources and quotas."
+
+      - name: Log retryable launch failure
+        if: steps.launch.outcome == 'failure'
+        run: echo "Launch attempt failed, most likely because host capacity is unavailable. The schedule will retry."

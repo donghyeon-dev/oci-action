@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OCI A1 자동 확보 — GitHub Actions 시스템 플랜</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600;9..144,800&family=IBM+Plex+Sans+KR:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f6f3ec;
+    --bg-warm: #efeadd;
+    --ink: #1a1815;
+    --ink-soft: #4a4640;
+    --ink-mute: #857f74;
+    --rule: #d4ccb8;
+    --accent: #b84a1f;
+    --accent-deep: #8e3415;
+    --code-bg: #1d1a16;
+    --code-ink: #e8e1cf;
+    --code-mute: #8a8373;
+    --code-accent: #e89c3f;
+    --warn-bg: #fef4e6;
+    --warn-border: #d99a2b;
+    --note-bg: #eef2ec;
+    --note-border: #8aa38a;
+    --danger-bg: #fbebe6;
+    --danger-border: #b84a1f;
+    --phase-bg: #f4eee0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141210;
+      --bg-warm: #1c1916;
+      --ink: #ece6d4;
+      --ink-soft: #c4bda9;
+      --ink-mute: #807a6d;
+      --rule: #2f2a23;
+      --accent: #e89c3f;
+      --accent-deep: #f4b766;
+      --code-bg: #0c0a08;
+      --code-ink: #e8e1cf;
+      --code-mute: #6e6a60;
+      --warn-bg: #2a2015;
+      --warn-border: #b88635;
+      --note-bg: #1a2119;
+      --note-border: #5e7e5e;
+      --danger-bg: #2a1a15;
+      --danger-border: #b84a1f;
+      --phase-bg: #1f1c17;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: 'IBM Plex Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 4rem 2rem 8rem; }
+  @media (max-width: 640px) { .wrap { padding: 2rem 1.25rem 5rem; } }
+
+  header.mast { border-bottom: 1px solid var(--rule); padding-bottom: 2.5rem; margin-bottom: 3rem; }
+  .eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 1.2rem;
+  }
+  .eyebrow::before { content: "§ "; color: var(--ink-mute); }
+  h1.title {
+    font-family: 'Fraunces', serif;
+    font-weight: 800;
+    font-size: clamp(2rem, 5vw, 3rem);
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    margin: 0 0 1rem;
+  }
+  h1.title em { font-style: italic; font-weight: 300; color: var(--ink-soft); }
+  .deck {
+    font-family: 'Fraunces', serif;
+    font-size: 1.1rem;
+    font-style: italic;
+    font-weight: 300;
+    color: var(--ink-soft);
+    max-width: 60ch;
+    line-height: 1.5;
+    margin: 1.2rem 0 0;
+  }
+
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1.5rem;
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background: var(--bg-warm);
+    border: 1px solid var(--rule);
+  }
+  .meta-grid .item {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+  }
+  .meta-grid .item .lbl {
+    display: block;
+    color: var(--ink-mute);
+    font-size: 0.65rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 0.4rem;
+  }
+
+  nav.toc {
+    background: var(--bg-warm);
+    border: 1px solid var(--rule);
+    padding: 1.5rem 1.8rem;
+    margin: 3rem 0 4rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+  }
+  nav.toc h2 {
+    font-family: 'Fraunces', serif;
+    font-weight: 600;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    margin: 0 0 1rem;
+    color: var(--ink-mute);
+  }
+  nav.toc ol { margin: 0; padding: 0; list-style: none; counter-reset: toc; }
+  nav.toc li { counter-increment: toc; padding: 0.25rem 0; }
+  nav.toc li::before {
+    content: counter(toc, decimal-leading-zero);
+    color: var(--accent);
+    margin-right: 1rem;
+    font-size: 0.75rem;
+  }
+  nav.toc a { color: var(--ink-soft); text-decoration: none; border-bottom: 1px dotted transparent; transition: border-color 0.2s; }
+  nav.toc a:hover { color: var(--ink); border-bottom-color: var(--accent); }
+
+  h2.section {
+    font-family: 'Fraunces', serif;
+    font-weight: 600;
+    font-size: 1.9rem;
+    line-height: 1.2;
+    letter-spacing: -0.015em;
+    margin: 4.5rem 0 1.5rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--rule);
+  }
+  h2.section .num {
+    display: block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.2em;
+    color: var(--accent);
+    font-weight: 500;
+    margin-bottom: 0.6rem;
+    text-transform: uppercase;
+  }
+  h3 {
+    font-family: 'IBM Plex Sans KR', sans-serif;
+    font-weight: 700;
+    font-size: 1.1rem;
+    margin: 2rem 0 0.8rem;
+    color: var(--ink);
+  }
+  h3::before { content: "→ "; color: var(--accent); font-family: 'JetBrains Mono', monospace; font-weight: 400; }
+  h4 {
+    font-family: 'IBM Plex Sans KR', sans-serif;
+    font-weight: 600;
+    font-size: 1rem;
+    margin: 1.5rem 0 0.6rem;
+    color: var(--ink-soft);
+  }
+
+  p { margin: 0 0 1.2rem; }
+
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.86em;
+    background: var(--bg-warm);
+    color: var(--accent-deep);
+    padding: 0.12em 0.4em;
+    border-radius: 3px;
+    border: 1px solid var(--rule);
+    word-break: break-all;
+  }
+  @media (prefers-color-scheme: dark) { code { color: var(--accent); } }
+  a { color: var(--ink); text-decoration-color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  a:hover { text-decoration-thickness: 2px; }
+  strong { font-weight: 700; }
+  ul, ol { padding-left: 1.5rem; margin: 0 0 1.4rem; }
+  li { margin: 0.35rem 0; }
+  ul li::marker { color: var(--accent); }
+  ol li::marker { color: var(--ink-mute); font-family: 'JetBrains Mono', monospace; font-size: 0.85em; }
+
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    padding: 1.3rem 1.5rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    line-height: 1.6;
+    margin: 1rem 0 1.6rem;
+    position: relative;
+  }
+  pre::before {
+    content: attr(data-lang);
+    position: absolute;
+    top: 0.5rem;
+    right: 0.9rem;
+    font-size: 0.65rem;
+    letter-spacing: 0.15em;
+    color: var(--code-mute);
+    text-transform: uppercase;
+  }
+  pre code { background: none; border: none; padding: 0; color: inherit; font-size: inherit; }
+  .comment { color: var(--code-mute); font-style: italic; }
+  .key { color: #e89c9c; }
+  .str { color: #b8d8a8; }
+
+  .callout {
+    padding: 1.1rem 1.4rem 1.1rem 1.6rem;
+    margin: 1.6rem 0;
+    border-left: 3px solid;
+    font-size: 0.95rem;
+    line-height: 1.6;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .label {
+    display: block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+  }
+  .callout.note { background: var(--note-bg); border-color: var(--note-border); }
+  .callout.note .label { color: var(--note-border); }
+  .callout.warn { background: var(--warn-bg); border-color: var(--warn-border); }
+  .callout.warn .label { color: var(--warn-border); }
+  .callout.danger { background: var(--danger-bg); border-color: var(--danger-border); }
+  .callout.danger .label { color: var(--danger-border); }
+
+  .phase-card {
+    background: var(--phase-bg);
+    border: 1px solid var(--rule);
+    padding: 1.5rem 1.8rem;
+    margin: 1.5rem 0;
+    border-left: 4px solid var(--accent);
+  }
+  .phase-card .phase-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--accent);
+    letter-spacing: 0.2em;
+    margin: 0;
+  }
+  .phase-card h4 {
+    font-family: 'Fraunces', serif;
+    font-weight: 600;
+    font-size: 1.3rem;
+    margin: 0.4rem 0 0.6rem;
+    color: var(--ink);
+  }
+  .phase-card .duration {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--ink-mute);
+    margin-bottom: 0.8rem;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.5rem 0;
+    font-size: 0.9rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.7rem 1rem;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th {
+    background: var(--bg-warm);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+    color: var(--ink-mute);
+    text-transform: uppercase;
+  }
+
+  .ascii-diagram {
+    background: var(--bg-warm);
+    border: 1px solid var(--rule);
+    padding: 1.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    overflow-x: auto;
+    margin: 1.5rem 0 2rem;
+    white-space: pre;
+  }
+
+  .principle {
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    padding: 1.8rem 0;
+    margin: 2.5rem 0;
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 1.2rem;
+    font-weight: 300;
+    line-height: 1.5;
+    color: var(--ink-soft);
+  }
+  .principle::before {
+    content: "—";
+    color: var(--accent);
+    margin-right: 0.5rem;
+    font-style: normal;
+  }
+
+  .colophon {
+    margin-top: 6rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--rule);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--ink-mute);
+    text-align: center;
+    letter-spacing: 0.1em;
+  }
+
+  @media print {
+    body { background: white; color: black; }
+    pre { border: 1px solid #ccc; background: #fafafa; color: black; }
+    h2.section { page-break-before: always; }
+    nav.toc { page-break-after: always; }
+    .callout, .phase-card { border: 1px solid #ccc; background: #fafafa; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Architecture Plan / 2026</p>
+  <h1 class="title">GitHub Actions로<br>A1 자원을 <em>꾸준히</em> 잡기</h1>
+  <p class="deck">Cloud Shell 자동화의 한계(silent block, 세션 종료, 차단 누적)를 벗어나, GitHub의 인프라 위에서 차분하게 돌아가는 영구 시스템을 설계한다.</p>
+
+  <div class="meta-grid">
+    <div class="item">
+      <span class="lbl">Authentication</span>
+      OCI API Key (장기) 또는 OIDC (단기·고급)
+    </div>
+    <div class="item">
+      <span class="lbl">Schedule</span>
+      cron */15 (15분마다)
+    </div>
+    <div class="item">
+      <span class="lbl">Notification</span>
+      Telegram bot
+    </div>
+    <div class="item">
+      <span class="lbl">Cost</span>
+      Public repo: 무료 무제한
+    </div>
+    <div class="item">
+      <span class="lbl">Setup time</span>
+      약 60–90분
+    </div>
+    <div class="item">
+      <span class="lbl">Expected wait</span>
+      며칠~1주일
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">왜 GitHub Actions로 옮기는가</a></li>
+    <li><a href="#arch">전체 아키텍처</a></li>
+    <li><a href="#phases">단계별 플랜 개요</a></li>
+    <li><a href="#phase1">Phase 1 — OCI API 키 발급</a></li>
+    <li><a href="#phase2">Phase 2 — GitHub 레포 생성 & Secrets</a></li>
+    <li><a href="#phase3">Phase 3 — 핵심 워크플로우 작성</a></li>
+    <li><a href="#phase4">Phase 4 — 안전장치 추가</a></li>
+    <li><a href="#phase5">Phase 5 — 테스트 & 가동</a></li>
+    <li><a href="#post">Phase 6 — 성공 후 마무리</a></li>
+    <li><a href="#risks">리스크 &amp; 대처</a></li>
+  </ol>
+</nav>
+
+<!-- ==================================================== -->
+
+<h2 class="section" id="why"><span class="num">Section 01</span>왜 GitHub Actions로 옮기는가</h2>
+
+<p>Cloud Shell 자동화는 단기엔 빠르게 시작할 수 있지만, 길어질수록 다음 한계에 부딪힌다.</p>
+
+<table>
+  <tr><th>항목</th><th>Cloud Shell</th><th>GitHub Actions</th></tr>
+  <tr>
+    <td>세션 유지</td>
+    <td>20분 비활성 → 종료, 누적 24시간 → 강제 종료</td>
+    <td>✅ 영구. 매 cron마다 새 컨테이너</td>
+  </tr>
+  <tr>
+    <td>IP 차단 위험</td>
+    <td>동일 IP에서 반복 시도 → silent block</td>
+    <td>✅ 매번 다른 GitHub Runner IP</td>
+  </tr>
+  <tr>
+    <td>실행 빈도</td>
+    <td>수동 조정 필요</td>
+    <td>cron 한 줄로 영구 스케줄</td>
+  </tr>
+  <tr>
+    <td>실패 추적</td>
+    <td>로그 파일 직접 봐야 함</td>
+    <td>Actions 탭에 모든 실행 기록</td>
+  </tr>
+  <tr>
+    <td>비용</td>
+    <td>무료</td>
+    <td>Public repo 무료, Private 월 2000분</td>
+  </tr>
+</table>
+
+<p class="principle">Cloud Shell은 "내가 켜둔 만큼 돈다." GitHub Actions는 "내가 잠들어도 돈다."</p>
+
+<h3>현재 상황의 핵심 문제</h3>
+<p>Cloud Shell에서 30초 간격으로 누적 시도한 결과, OCI가 launch 요청을 silent block 중이다 (응답 무반응). 이 상태에서 동일 환경으로 계속 시도하면 차단이 더 강화될 뿐. <strong>환경 자체를 바꾸는 것</strong>이 가장 효과적인 해결.</p>
+
+<!-- ==================================================== -->
+
+<h2 class="section" id="arch"><span class="num">Section 02</span>전체 아키텍처</h2>
+
+<div class="ascii-diagram">┌──────────────────────────────────────────────────────────────┐
+│  GitHub.com                                                  │
+│                                                              │
+│  ┌────────────────────────┐     ┌──────────────────────┐    │
+│  │ oci-a1-bot 레포         │     │ Secrets (암호화)      │    │
+│  │  ├ .github/workflows/   │     │  ├ OCI_USER_OCID      │    │
+│  │  │  └ launch.yml        │◀───▶│  ├ OCI_TENANCY_OCID   │    │
+│  │  ├ scripts/             │     │  ├ OCI_FINGERPRINT    │    │
+│  │  │  └ launch.sh         │     │  ├ OCI_KEY_CONTENT    │    │
+│  │  └ README.md            │     │  ├ OCI_REGION         │    │
+│  └─────────┬──────────────┘     │  ├ SUBNET_ID          │    │
+│            │                     │  ├ IMAGE_ID           │    │
+│            │ schedule: cron      │  ├ AVAILABILITY_DOMAIN │    │
+│            ▼                     │  ├ SSH_PUBLIC_KEY     │    │
+│  ┌────────────────────────┐     │  ├ TELEGRAM_TOKEN     │    │
+│  │ Ubuntu Runner          │     │  └ TELEGRAM_CHAT_ID   │    │
+│  │ (15분마다 새 컨테이너)    │     └──────────────────────┘    │
+│  │                        │                                  │
+│  │  1. OCI CLI 설치       │                                  │
+│  │  2. 인증                │                                  │
+│  │  3. 인스턴스 존재 확인    │                                  │
+│  │  4. 없으면 launch 시도   │                                  │
+│  │  5. 결과를 Telegram     │                                  │
+│  │  6. 컨테이너 종료        │                                  │
+│  └─────────┬──────────────┘                                  │
+└────────────┼─────────────────────────────────────────────────┘
+             │
+             ▼
+   ┌──────────────────┐         ┌──────────────────┐
+   │ OCI API          │         │ Telegram Bot     │
+   │ Chuncheon Region │         │ 알림 전송         │
+   └──────────────────┘         └──────────────────┘</div>
+
+<h3>핵심 설계 원칙</h3>
+<ul>
+  <li><strong>매 실행은 독립적</strong>: 컨테이너가 매번 새로 생성, 상태는 OCI 자체에서만 조회</li>
+  <li><strong>중복 방지</strong>: 매번 먼저 인스턴스 존재 여부 확인. 있으면 즉시 종료</li>
+  <li><strong>차분한 빈도</strong>: cron 15분 (시간당 4회). 차단 위험 최소</li>
+  <li><strong>안전장치 다중화</strong>: 인스턴스 수 체크, 횟수 한도, 자동 비활성화</li>
+</ul>
+
+<!-- ==================================================== -->
+
+<h2 class="section" id="phases"><span class="num">Section 03</span>단계별 플랜 개요</h2>
+
+<div class="phase-card">
+  <p class="phase-num">PHASE 01</p>
+  <h4>OCI API 키 발급</h4>
+  <p class="duration">약 15분</p>
+  <p>OCI Console에서 GitHub Actions가 OCI에 인증할 API 키를 발급. 4가지 정보(user OCID, tenancy OCID, fingerprint, region)와 private key 파일 확보.</p>
+</div>
+
+<div class="phase-card">
+  <p class="phase-num">PHASE 02</p>
+  <h4>GitHub 레포 생성 &amp; Secrets 등록</h4>
+  <p class="duration">약 15분</p>
+  <p>새 레포 생성 (public 권장 — 무료 무제한). 11개 Secret 등록. 코드는 공개되어도 안전 (민감 정보는 모두 Secret).</p>
+</div>
+
+<div class="phase-card">
+  <p class="phase-num">PHASE 03</p>
+  <h4>핵심 워크플로우 작성</h4>
+  <p class="duration">약 20분</p>
+  <p><code>.github/workflows/launch.yml</code> 작성. cron 15분 스케줄, OCI 공식 Action 사용, 인스턴스 존재 확인 → launch 시도 → 결과 알림.</p>
+</div>
+
+<div class="phase-card">
+  <p class="phase-num">PHASE 04</p>
+  <h4>안전장치 추가</h4>
+  <p class="duration">약 15분</p>
+  <p>가장 중요한 단계. 한도 초과 시 자동 정지, 성공 시 cron 비활성화, 일일 시도 제한, 비용 모니터링.</p>
+</div>
+
+<div class="phase-card">
+  <p class="phase-num">PHASE 05</p>
+  <h4>테스트 &amp; 가동</h4>
+  <p class="duration">약 15분</p>
+  <p>수동 트리거로 첫 실행. 로그 확인. Telegram 알림 동작 확인. 정상 동작하면 그대로 둠.</p>
+</div>
+
+<div class="phase-card">
+  <p class="phase-num">PHASE 06</p>
+  <h4>성공 후 마무리</h4>
+  <p class="duration">잡힌 직후 약 30분</p>
+  <p>인스턴스 잡히면 워크플로우 비활성화 → SSH 접속 → OpenClaw 가이드의 Section 04로 복귀.</p>
+</div>
+
+<!-- ==================================================== -->
+
+<h2 class="section" id="phase1"><span class="num">Phase 01</span>OCI API 키 발급</h2>
+
+<h3>1-1. API Key 페어 생성</h3>
+<ol>
+  <li>OCI Console 우측 상단 프로필 아이콘 → <strong>My profile</strong></li>
+  <li>좌측 <strong>Resources</strong> → <strong>API keys</strong> → <strong>Add API key</strong></li>
+  <li>"<strong>Generate API key pair</strong>" 선택</li>
+  <li><strong>Download private key</strong> 클릭 → <code>.pem</code> 파일 다운로드 (이름 예: <code>oracleidentitycloud_donghyeondev-04-29-XX.pem</code>)</li>
+  <li><strong>Add</strong> 클릭</li>
+</ol>
+
+<h3>1-2. Configuration File Preview에서 4가지 정보 복사</h3>
+<p>Add 직후 화면에 표시되는 미리보기:</p>
+
+<pre data-lang="config"><code>[DEFAULT]
+<span class="key">user</span>=ocid1.user.oc1..xxxxxxxxxxxxxx
+<span class="key">fingerprint</span>=12:34:56:78:90:ab:cd:ef:...
+<span class="key">tenancy</span>=ocid1.tenancy.oc1..xxxxxxxxxxxxxx
+<span class="key">region</span>=ap-chuncheon-1
+<span class="key">key_file</span>=&lt;path to your private keyfile&gt;</code></pre>
+
+<p>이 4가지 값을 메모장에 복사해두세요. <strong>이 페이지를 닫으면 fingerprint는 다시 볼 수 없으나</strong>, API keys 목록 페이지에서 다시 확인 가능합니다.</p>
+
+<h3>1-3. Private Key 파일 내용 확보</h3>
+<p>다운받은 <code>.pem</code> 파일을 <strong>메모장(또는 VS Code)으로 열기</strong>. 내용은 다음과 같이 보입니다:</p>
+
+<pre data-lang="pem"><code>-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC3...
+...여러 줄...
+...AVCx2hYYqq3X2HNBQ==
+-----END PRIVATE KEY-----</code></pre>
+
+<p><strong>전체 내용을 통째로</strong> 복사해서 별도 메모장에 보관. <code>-----BEGIN</code>부터 <code>-----END PRIVATE KEY-----</code>까지 한 글자도 빠짐 없이.</p>
+
+<div class="callout danger">
+  <span class="label">보안 경고</span>
+  <p>이 .pem 파일은 OCI 계정의 인증 자격증명입니다. <strong>절대로 GitHub에 직접 커밋하지 마세요.</strong> 반드시 GitHub Secrets에만 저장. 만약 실수로 노출되면 즉시 OCI Console에서 해당 API key를 삭제하고 새로 발급.</p>
+</div>
+
+<!-- ==================================================== -->
+
+<h2 class="section" id="phase2"><span class="num">Phase 02</span>GitHub 레포 생성 &amp; Secrets</h2>
+
+<h3>2-1. 새 레포 생성</h3>
+<ol>
+  <li><a href="https://github.com/new">github.com/new</a> 접속</li>
+  <li>Repository name: <code>oci-a1-bot</code></li>
+  <li><strong>Public 권장</strong> (무료 무제한 Actions). 코드에 민감 정보 없으니 안전</li>
+  <li><strong>Add a README file</strong> 체크</li>
+  <li>License: 자유 선택 (MIT 추천)</li>
+  <li><strong>Create repository</strong></li>
+</ol>
+
+<h3>2-2. Secrets 등록 (11개)</h3>
+<p>레포 → <strong>Settings</strong> → 좌측 <strong>Secrets and variables</strong> → <strong>Actions</strong> → <strong>New repository secret</strong></p>
+
+<table>
+  <tr><th>Secret 이름</th><th>값</th></tr>
+  <tr><td><code>OCI_CLI_USER</code></td><td>Phase 1에서 복사한 user OCID</td></tr>
+  <tr><td><code>OCI_CLI_TENANCY</code></td><td>tenancy OCID</td></tr>
+  <tr><td><code>OCI_CLI_FINGERPRINT</code></td><td>fingerprint (콜론 포함 그대로)</td></tr>
+  <tr><td><code>OCI_CLI_KEY_CONTENT</code></td><td>.pem 파일 전체 내용 (BEGIN~END 포함)</td></tr>
+  <tr><td><code>OCI_CLI_REGION</code></td><td><code>ap-chuncheon-1</code></td></tr>
+  <tr><td><code>OCI_COMPARTMENT_ID</code></td><td>tenancy OCID와 동일 (root compartment 사용)</td></tr>
+  <tr><td><code>OCI_SUBNET_ID</code></td><td>ocid1.subnet.oc1.ap-chuncheon-1...</td></tr>
+  <tr><td><code>OCI_IMAGE_ID</code></td><td>ocid1.image.oc1.ap-chuncheon-1... (Ubuntu 22.04 ARM)</td></tr>
+  <tr><td><code>OCI_AVAILABILITY_DOMAIN</code></td><td><code>nHas:AP-CHUNCHEON-1-AD-1</code></td></tr>
+  <tr><td><code>OCI_SSH_PUBLIC_KEY</code></td><td>ssh-rsa AAAA... 한 줄</td></tr>
+  <tr><td><code>TELEGRAM_BOT_TOKEN</code></td><td>새로 발급받은 봇 토큰</td></tr>
+  <tr><td><code>TELEGRAM_CHAT_ID</code></td><td>본인 chat id</td></tr>
+</table>
+
+<div class="callout note">
+  <span class="label">Secret 입력 팁</span>
+  <p>Secret은 등록 후 다시 볼 수 없고 수정만 가능합니다. 첫 입력 시 정확히 들어갔는지 한 번 더 확인. 특히 <code>OCI_CLI_KEY_CONTENT</code>는 줄바꿈 포함 통째로 붙여넣어야 하니 길이 확인 필수.</p>
+</div>
+
+<!-- ==================================================== -->
+
+<h2 class="section" id="phase3"><span class="num">Phase 03</span>핵심 워크플로우 작성</h2>
+
+<h3>3-1. 워크플로우 파일 생성</h3>
+<p>GitHub 레포 페이지에서:</p>
+<ol>
+  <li><strong>Add file</strong> → <strong>Create new file</strong></li>
+  <li>파일명: <code>.github/workflows/launch.yml</code> (슬래시 그대로 입력하면 폴더 자동 생성)</li>
+</ol>
+
+<h3>3-2. 워크플로우 내용</h3>
+
+<pre data-lang="yaml"><code><span class="key">name</span>: Launch OCI A1 Instance
+
+<span class="key">on</span>:
+  <span class="key">schedule</span>:
+    <span class="comment"># 매 15분마다 (UTC 기준). 너무 자주는 차단 위험.</span>
+    - <span class="key">cron</span>: <span class="str">'*/15 * * * *'</span>
+  <span class="key">workflow_dispatch</span>:  <span class="comment"># 수동 트리거 가능</span>
+
+<span class="key">jobs</span>:
+  <span class="key">launch</span>:
+    <span class="key">runs-on</span>: ubuntu-22.04
+    <span class="key">timeout-minutes</span>: 5
+    <span class="key">env</span>:
+      <span class="key">OCI_CLI_USER</span>: ${{ secrets.OCI_CLI_USER }}
+      <span class="key">OCI_CLI_TENANCY</span>: ${{ secrets.OCI_CLI_TENANCY }}
+      <span class="key">OCI_CLI_FINGERPRINT</span>: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      <span class="key">OCI_CLI_KEY_CONTENT</span>: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      <span class="key">OCI_CLI_REGION</span>: ${{ secrets.OCI_CLI_REGION }}
+
+    <span class="key">steps</span>:
+      - <span class="key">name</span>: Check existing instance
+        <span class="key">id</span>: check
+        <span class="key">uses</span>: oracle-actions/run-oci-cli-command@v1.3.0
+        <span class="key">with</span>:
+          <span class="key">command</span>: |
+            compute instance list \
+              --compartment-id ${{ secrets.OCI_COMPARTMENT_ID }} \
+              --lifecycle-state RUNNING \
+              --query "data[?shape=='VM.Standard.A1.Flex'] | length(@)" \
+              --raw-output
+
+      - <span class="key">name</span>: Skip if instance exists
+        <span class="key">if</span>: steps.check.outputs.output != '0' &amp;&amp; steps.check.outputs.output != ''
+        <span class="key">run</span>: |
+          echo "Instance already exists. Skipping launch."
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="Instance already running. Disable workflow."
+          exit 0
+
+      - <span class="key">name</span>: Try launch instance
+        <span class="key">id</span>: launch
+        <span class="key">if</span>: steps.check.outputs.output == '0' || steps.check.outputs.output == ''
+        <span class="key">continue-on-error</span>: true
+        <span class="key">uses</span>: oracle-actions/run-oci-cli-command@v1.3.0
+        <span class="key">with</span>:
+          <span class="key">command</span>: |
+            compute instance launch \
+              --availability-domain "${{ secrets.OCI_AVAILABILITY_DOMAIN }}" \
+              --compartment-id ${{ secrets.OCI_COMPARTMENT_ID }} \
+              --shape VM.Standard.A1.Flex \
+              --shape-config '{"ocpus":1,"memoryInGBs":6}' \
+              --image-id ${{ secrets.OCI_IMAGE_ID }} \
+              --subnet-id ${{ secrets.OCI_SUBNET_ID }} \
+              --display-name dh-server-a1 \
+              --assign-public-ip true \
+              --metadata '{"ssh_authorized_keys":"${{ secrets.OCI_SSH_PUBLIC_KEY }}"}'
+          <span class="key">silent</span>: false
+
+      - <span class="key">name</span>: Notify on success
+        <span class="key">if</span>: steps.launch.outcome == 'success'
+        <span class="key">run</span>: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="🎉 A1 instance launched! Check OCI Console."
+
+      - <span class="key">name</span>: Log on failure (no notify)
+        <span class="key">if</span>: steps.launch.outcome == 'failure'
+        <span class="key">run</span>: |
+          echo "Launch attempt failed (likely 'Out of capacity'). Will retry in 15 min."</code></pre>
+
+<div class="callout note">
+  <span class="label">설계 포인트</span>
+  <ul style="margin: 0;">
+    <li><strong>실패 시 알림 안 보냄</strong>: 매번 "자원 부족" 알림 오면 폭격 됨. 성공 시에만 알림.</li>
+    <li><strong>인스턴스 이미 있으면 즉시 종료</strong>: 한도 초과 방지의 첫 번째 안전장치.</li>
+    <li><strong>continue-on-error</strong>: launch 실패해도 워크플로우 자체는 성공 처리. cron 계속 돔.</li>
+    <li><strong>timeout-minutes: 5</strong>: 무한 대기 방지. silent block 걸려도 5분 후 자동 종료.</li>
+  </ul>
+</div>
+
+<h3>3-3. 커밋</h3>
+<p>페이지 하단 commit message: "Add launch workflow" → <strong>Commit changes</strong></p>
+
+<!-- ==================================================== -->
+
+<h2 class="section" id="phase4"><span class="num">Phase 04</span>안전장치 추가</h2>
+
+<p>이게 정말 중요합니다. 안전장치 없이 cron 돌리면 의도치 않은 결과가 누적될 수 있어요.</p>
+
+<h3>4-1. 일일 한도 — 워크플로우 자동 비활성화</h3>
+<p>실수로 한도 초과 같은 명백한 에러가 반복되면 워크플로우를 자동 비활성화. 위 워크플로우의 마지막 step 추가:</p>
+
+<pre data-lang="yaml"><code>      - <span class="key">name</span>: Disable on limit exceeded
+        <span class="key">if</span>: contains(steps.launch.outputs.output, 'LimitExceeded')
+        <span class="key">env</span>:
+          <span class="key">GH_TOKEN</span>: ${{ secrets.GITHUB_TOKEN }}
+        <span class="key">run</span>: |
+          gh workflow disable launch.yml -R ${{ github.repository }}
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="⚠️ Workflow disabled: LimitExceeded. Check existing instances in OCI."</code></pre>
+
+<h3>4-2. 워크플로우 권한 추가</h3>
+<p>위 step이 자기 자신을 비활성화하려면 권한이 필요합니다. <code>jobs.launch</code> 아래에:</p>
+
+<pre data-lang="yaml"><code>    <span class="key">permissions</span>:
+      <span class="key">actions</span>: write
+      <span class="key">contents</span>: read</code></pre>
+
+<h3>4-3. 성공 시 자동 비활성화</h3>
+<p>인스턴스가 잡히면 더 이상 cron 돌릴 필요가 없습니다. <strong>4-1과 같은 패턴으로 성공 시에도 비활성화</strong>:</p>
+
+<pre data-lang="yaml"><code>      - <span class="key">name</span>: Disable workflow on success
+        <span class="key">if</span>: steps.launch.outcome == 'success'
+        <span class="key">env</span>:
+          <span class="key">GH_TOKEN</span>: ${{ secrets.GITHUB_TOKEN }}
+        <span class="key">run</span>: gh workflow disable launch.yml -R ${{ github.repository }}</code></pre>
+
+<h3>4-4. 통계 알림 (옵션)</h3>
+<p>매일 오전 9시에 어제 시도 횟수 요약 알림:</p>
+
+<pre data-lang="yaml"><code><span class="comment"># 별도 워크플로우 .github/workflows/daily-summary.yml</span>
+<span class="key">on</span>:
+  <span class="key">schedule</span>:
+    - <span class="key">cron</span>: <span class="str">'0 0 * * *'</span>  <span class="comment"># UTC 0시 = KST 9시</span></code></pre>
+
+<div class="callout warn">
+  <span class="label">⚠ 가장 흔한 실수</span>
+  <p>안전장치 없이 cron만 걸어두고 잊어버리면, 인스턴스가 잡힌 후에도 매 15분마다 추가 시도가 계속됩니다. 결국 한도 초과 → 봇이 망가짐. <strong>"성공 시 자동 비활성화"는 필수</strong>입니다.</p>
+</div>
+
+<!-- ==================================================== -->
+
+<h2 class="section" id="phase5"><span class="num">Phase 05</span>테스트 &amp; 가동</h2>
+
+<h3>5-1. 수동 트리거로 첫 실행</h3>
+<ol>
+  <li>레포 → <strong>Actions</strong> 탭</li>
+  <li>좌측 "Launch OCI A1 Instance" 워크플로우 선택</li>
+  <li>우측 <strong>Run workflow</strong> 버튼 → <strong>Run workflow</strong></li>
+  <li>30초 정도 후 새 실행이 목록에 나타남</li>
+  <li>클릭해서 로그 확인</li>
+</ol>
+
+<h3>5-2. 검증 체크리스트</h3>
+<ul>
+  <li><input type="checkbox"> 인증 step 통과 (오타나 권한 문제 없음)</li>
+  <li><input type="checkbox"> "Check existing instance" step에서 숫자 (보통 0) 출력</li>
+  <li><input type="checkbox"> "Try launch instance" step 실행됨</li>
+  <li><input type="checkbox"> 결과: <code>Out of host capacity</code> 또는 성공 (둘 다 정상)</li>
+  <li><input type="checkbox"> 워크플로우 전체는 ✅ 녹색으로 끝남 (continue-on-error 덕분)</li>
+</ul>
+
+<h3>5-3. cron 자동 실행 확인</h3>
+<p>15분 후 Actions 탭에서 자동 실행이 또 한 번 보이면 정상. 그대로 두고 텔레그램 기다리면 됨.</p>
+
+<h3>5-4. 흔한 첫 실행 에러</h3>
+
+<table>
+  <tr><th>에러</th><th>원인</th><th>해결</th></tr>
+  <tr>
+    <td><code>NotAuthenticated</code></td>
+    <td>Secret 중 하나 잘못됨</td>
+    <td>OCI_CLI_FINGERPRINT, OCI_CLI_KEY_CONTENT 재확인</td>
+  </tr>
+  <tr>
+    <td><code>InvalidPrivateKey</code></td>
+    <td>.pem 내용이 잘림</td>
+    <td>BEGIN~END 한 글자도 빠짐없이 다시 붙여넣기</td>
+  </tr>
+  <tr>
+    <td><code>NotFound: subnet</code></td>
+    <td>SUBNET_ID 잘못</td>
+    <td>OCI Console에서 다시 복사</td>
+  </tr>
+  <tr>
+    <td>silent block (timeout)</td>
+    <td>OCI 측 차단 아직 안 풀림</td>
+    <td>몇 시간 더 기다리고 다시 트리거</td>
+  </tr>
+</table>
+
+<!-- ==================================================== -->
+
+<h2 class="section" id="post"><span class="num">Phase 06</span>성공 후 마무리</h2>
+
+<h3>6-1. 잡혔다는 알림이 오면</h3>
+<ol>
+  <li>OCI Console → Compute → Instances → <code>dh-server-a1</code> 확인</li>
+  <li>상태가 <strong>RUNNING</strong>이면 성공</li>
+  <li><strong>Public IP</strong> 메모</li>
+  <li>워크플로우는 자동 비활성화되어 있을 것 (Phase 4-3 덕분). 안 됐으면 수동 비활성화: Actions 탭 → 워크플로우 → ⋯ 메뉴 → <strong>Disable workflow</strong></li>
+</ol>
+
+<h3>6-2. SSH 접속 테스트</h3>
+<pre data-lang="powershell"><code><span class="comment"># Windows PowerShell</span>
+ssh -i $HOME\.ssh\oci_a1 ubuntu@&lt;public-ip&gt;</code></pre>
+
+<h3>6-3. OCPU/메모리 확장 (선택)</h3>
+<p>1 OCPU/6GB로 잡았다면 콘솔에서 4 OCPU/24GB로 확장 가능:</p>
+<ol>
+  <li>인스턴스 페이지 → <strong>Edit</strong></li>
+  <li>OCPU: 4, Memory: 24 입력</li>
+  <li>저장 → 인스턴스 자동 재부팅</li>
+</ol>
+
+<h3>6-4. 기존 OpenClaw 가이드로 복귀</h3>
+<p>이전 가이드의 <strong>Section 04: 서버 초기 설정</strong>부터 이어서 진행. Tailscale, Docker, OpenClaw 순으로.</p>
+
+<!-- ==================================================== -->
+
+<h2 class="section" id="risks"><span class="num">Section 04</span>리스크 &amp; 대처</h2>
+
+<h3>리스크 1: GitHub 계정 차단</h3>
+<p>Cron 빈도가 너무 높으면 GitHub 측에서 abuse로 판단할 수 있음. <strong>15분 간격은 안전 범위</strong>. 5분 이하는 위험.</p>
+
+<h3>리스크 2: OCI 측 차단 누적</h3>
+<p>Cloud Shell에서 이미 누적된 차단이 GitHub IP에도 영향을 줄 수 있음. <strong>차단이 풀린 후</strong> (최소 12시간 이후) 첫 실행 권장.</p>
+
+<h3>리스크 3: API 키 노출</h3>
+<p>실수로 .pem 내용이나 OCID를 코드에 직접 박는 일이 있음. <strong>모든 민감 정보는 Secret에만</strong>. <code>.gitignore</code>에 <code>*.pem</code>, <code>*.env</code> 추가.</p>
+
+<h3>리스크 4: 한도 초과로 비용 발생</h3>
+<p>Always Free 한도 초과한 인스턴스가 만들어지면 시간당 과금. <strong>OCPU=1, MEMORY=6 고정</strong>으로 한도 절대 초과 안 함. 추가 안전 장치로 OCI Budget 알림 설정도 권장.</p>
+
+<h3>리스크 5: 텔레그램 토큰 노출</h3>
+<p>이번 작업 중 토큰이 두 번 노출됐으니 새 토큰 발급한 그대로 Secret에. 노출되면 누군가 봇으로 메시지 보낼 수 있음 (계정 탈취는 아님).</p>
+
+<!-- ==================================================== -->
+
+<section class="refs" style="margin-top: 5rem; padding-top: 2rem; border-top: 2px solid var(--ink); font-family: 'JetBrains Mono', monospace; font-size: 0.8rem;">
+  <h2 style="font-family: 'Fraunces', serif; font-weight: 600; font-size: 1.4rem; margin: 0 0 1.2rem;">References</h2>
+  <ul style="list-style: none; padding: 0;">
+    <li>Oracle 공식 GitHub Actions: <a href="https://github.com/oracle-actions">github.com/oracle-actions</a></li>
+    <li>run-oci-cli-command Action: <a href="https://github.com/oracle-actions/run-oci-cli-command">github.com/oracle-actions/run-oci-cli-command</a></li>
+    <li>OCI CLI 공식: <a href="https://docs.oracle.com/iaas/tools/oci-cli/latest/oci_cli_docs/">docs.oracle.com/iaas/tools/oci-cli</a></li>
+    <li>유사 사례 (PHP): <a href="https://github.com/hitrov/oci-arm-host-capacity">github.com/hitrov/oci-arm-host-capacity</a></li>
+    <li>유사 사례 (Python): <a href="https://github.com/mohankumarpaluru/oracle-freetier-instance-creation">github.com/mohankumarpaluru/oracle-freetier-instance-creation</a></li>
+    <li>GitHub Actions Schedule: <a href="https://docs.github.com/actions/using-workflows/events-that-trigger-workflows#schedule">docs.github.com/actions/schedule</a></li>
+    <li>GitHub Secrets: <a href="https://docs.github.com/actions/security-guides/encrypted-secrets">docs.github.com/actions/secrets</a></li>
+  </ul>
+</section>
+
+<div class="colophon">Prepared for Donghyeon · April 2026 · GitHub Actions Migration Plan</div>
+
+</div>
+
+</body>
+</html>
