@@ -51,11 +51,13 @@ Cloud Shell에서 사용하던 스크립트 기준 대응 관계:
 
 ## 3. Telegram 알림 준비
 
-- [ ] BotFather에서 새 Telegram bot 생성
-- [ ] `TELEGRAM_BOT_TOKEN` 확보
-- [ ] 봇에게 메시지 한 번 보내기
-- [ ] chat ID 확인
-- [ ] `TELEGRAM_CHAT_ID` 확보
+- [x] BotFather에서 새 Telegram bot 생성
+- [x] `TELEGRAM_BOT_TOKEN` 확보
+- [x] 봇에게 메시지 한 번 보내기
+- [x] chat ID 확인
+- [x] `TELEGRAM_CHAT_ID` 확보
+
+상태: 기존 Cloud Shell 스크립트에서 Telegram 통신이 이미 동작했으므로 준비 완료로 간주.
 
 ## 4. GitHub Repository Secrets 등록
 
