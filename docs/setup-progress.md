@@ -63,20 +63,24 @@ Cloud Shell에서 사용하던 스크립트 기준 대응 관계:
 
 Repository -> Settings -> Secrets and variables -> Actions -> New repository secret에서 등록합니다.
 
-- [ ] `OCI_CLI_USER`
-- [ ] `OCI_CLI_TENANCY`
-- [ ] `OCI_CLI_FINGERPRINT`
-- [ ] `OCI_CLI_KEY_CONTENT`
-- [ ] `OCI_CLI_REGION`
-- [ ] `OCI_COMPARTMENT_ID`
-- [ ] `OCI_SUBNET_ID`
-- [ ] `OCI_IMAGE_ID`
-- [ ] `OCI_AVAILABILITY_DOMAIN`
-- [ ] `OCI_SSH_PUBLIC_KEY`
-- [ ] `TELEGRAM_BOT_TOKEN`
-- [ ] `TELEGRAM_CHAT_ID`
+- [x] `OCI_CLI_USER`
+- [x] `OCI_CLI_TENANCY`
+- [x] `OCI_CLI_FINGERPRINT`
+- [x] `OCI_CLI_KEY_CONTENT`
+- [x] `OCI_CLI_REGION`
+- [x] `OCI_COMPARTMENT_ID`
+- [x] `OCI_SUBNET_ID`
+- [x] `OCI_IMAGE_ID`
+- [x] `OCI_AVAILABILITY_DOMAIN`
+- [x] `OCI_SSH_PUBLIC_KEY`
+- [x] `TELEGRAM_BOT_TOKEN`
+- [x] `TELEGRAM_CHAT_ID`
 
 자세한 설명은 `docs/secrets.md`를 참고합니다.
+
+상태: 사용자가 GitHub Repository Secrets 12개 등록 완료를 확인함.
+
+다음 단계: GitHub Actions 탭에서 `Launch OCI A1 Instance` workflow를 수동 실행.
 
 ## 5. 첫 수동 실행
 
