@@ -1,6 +1,11 @@
 name: Launch OCI A1 Instance
 
 on:
+  schedule:
+    # Every 30 minutes. GitHub schedules use UTC.
+    # 30m balances A1 capacity polling against OCI retry-token 429 loops
+    # and GitHub's tendency to skip very short cron intervals under load.
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 permissions:
