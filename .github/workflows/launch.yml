@@ -54,11 +54,26 @@ jobs:
 
       - name: Prepare launch JSON inputs
         if: steps.check.outputs.raw_output == '0' || steps.check.outputs.raw_output == ''
+        env:
+          OCI_SSH_PUBLIC_KEY: ${{ secrets.OCI_SSH_PUBLIC_KEY }}
         run: |
           cat > "$RUNNER_TEMP/oci-shape-config.json" <<'JSON'
           {"ocpus":1,"memoryInGBs":6}
           JSON
-          jq -n --arg ssh_key "${{ secrets.OCI_SSH_PUBLIC_KEY }}" \
+
+          raw_ssh_key="$(printf '%s' "$OCI_SSH_PUBLIC_KEY" | tr -d '\r')"
+          raw_ssh_key="${raw_ssh_key#\"}"
+          raw_ssh_key="${raw_ssh_key%\"}"
+          raw_ssh_key="${raw_ssh_key#\'}"
+          raw_ssh_key="${raw_ssh_key%\'}"
+          ssh_key="$(printf '%s\n' "$raw_ssh_key" | awk 'NF {print $1 " " $2; exit}')"
+
+          if ! printf '%s' "$ssh_key" | grep -Eq '^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/]+={0,3}$'; then
+            echo "::error::OCI_SSH_PUBLIC_KEY must be a single OpenSSH public key, for example: ssh-rsa AAAA..."
+            exit 1
+          fi
+
+          jq -n --arg ssh_key "$ssh_key" \
             '{ssh_authorized_keys: $ssh_key}' > "$RUNNER_TEMP/oci-metadata.json"
 
       - name: Try launch A1 instance
