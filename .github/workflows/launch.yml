@@ -52,6 +52,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow disable launch.yml -R ${{ github.repository }}
 
+      - name: Prepare launch JSON inputs
+        if: steps.check.outputs.raw_output == '0' || steps.check.outputs.raw_output == ''
+        run: |
+          cat > "$RUNNER_TEMP/oci-shape-config.json" <<'JSON'
+          {"ocpus":1,"memoryInGBs":6}
+          JSON
+          jq -n --arg ssh_key "${{ secrets.OCI_SSH_PUBLIC_KEY }}" \
+            '{ssh_authorized_keys: $ssh_key}' > "$RUNNER_TEMP/oci-metadata.json"
+
       - name: Try launch A1 instance
         id: launch
         if: steps.check.outputs.raw_output == '0' || steps.check.outputs.raw_output == ''
@@ -63,12 +72,12 @@ jobs:
             --availability-domain "${{ secrets.OCI_AVAILABILITY_DOMAIN }}"
             --compartment-id ${{ secrets.OCI_COMPARTMENT_ID }}
             --shape VM.Standard.A1.Flex
-            --shape-config '{"ocpus":1,"memoryInGBs":6}'
+            --shape-config file://${{ runner.temp }}/oci-shape-config.json
             --image-id ${{ secrets.OCI_IMAGE_ID }}
             --subnet-id ${{ secrets.OCI_SUBNET_ID }}
             --display-name dh-server-a1
             --assign-public-ip true
-            --metadata '{"ssh_authorized_keys":"${{ secrets.OCI_SSH_PUBLIC_KEY }}"}'
+            --metadata file://${{ runner.temp }}/oci-metadata.json
           silent: false
 
       - name: Notify on launch success
