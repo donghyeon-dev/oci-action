@@ -36,7 +36,7 @@ jobs:
             compute instance list
             --compartment-id ${{ secrets.OCI_COMPARTMENT_ID }}
           query: 'data[?shape==''VM.Standard.A1.Flex'' && \"lifecycle-state\"!=''TERMINATED'' && \"lifecycle-state\"!=''TERMINATING''] | length(@)'
-          silent: false
+          silent: true
 
       - name: Stop if A1 instance already exists
         if: steps.check.outputs.raw_output != '0' && steps.check.outputs.raw_output != ''
@@ -80,20 +80,31 @@ jobs:
         id: launch
         if: steps.check.outputs.raw_output == '0' || steps.check.outputs.raw_output == ''
         continue-on-error: true
-        uses: oracle-actions/run-oci-cli-command@v1.3.2
-        with:
-          command: >-
-            compute instance launch
-            --availability-domain "${{ secrets.OCI_AVAILABILITY_DOMAIN }}"
-            --compartment-id ${{ secrets.OCI_COMPARTMENT_ID }}
-            --shape VM.Standard.A1.Flex
-            --shape-config file://${{ runner.temp }}/oci-shape-config.json
-            --image-id ${{ secrets.OCI_IMAGE_ID }}
-            --subnet-id ${{ secrets.OCI_SUBNET_ID }}
-            --display-name dh-server-a1
-            --assign-public-ip true
-            --metadata file://${{ runner.temp }}/oci-metadata.json
-          silent: false
+        run: |
+          set +e
+          output="$("$HOME/.local/bin/oci" compute instance launch \
+            --availability-domain "${{ secrets.OCI_AVAILABILITY_DOMAIN }}" \
+            --compartment-id "${{ secrets.OCI_COMPARTMENT_ID }}" \
+            --shape VM.Standard.A1.Flex \
+            --shape-config "file://${{ runner.temp }}/oci-shape-config.json" \
+            --image-id "${{ secrets.OCI_IMAGE_ID }}" \
+            --subnet-id "${{ secrets.OCI_SUBNET_ID }}" \
+            --display-name dh-server-a1 \
+            --assign-public-ip true \
+            --metadata "file://${{ runner.temp }}/oci-metadata.json" \
+            2>&1)"
+          exit_code=$?
+          set -e
+
+          printf '%s\n' "$output"
+          {
+            echo "exit_code=$exit_code"
+            echo "output<<OCI_OUTPUT"
+            printf '%s\n' "$output"
+            echo "OCI_OUTPUT"
+          } >> "$GITHUB_OUTPUT"
+
+          exit "$exit_code"
 
       - name: Notify on launch success
         if: steps.launch.outcome == 'success'
@@ -109,7 +120,7 @@ jobs:
         run: gh workflow disable launch.yml -R ${{ github.repository }}
 
       - name: Disable workflow on OCI limit exceeded
-        if: contains(steps.launch.outputs.output, 'LimitExceeded') || contains(steps.launch.outputs.raw_output, 'LimitExceeded')
+        if: contains(steps.launch.outputs.output, 'LimitExceeded')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -120,4 +131,49 @@ jobs:
 
       - name: Log retryable launch failure
         if: steps.launch.outcome == 'failure'
-        run: echo "Launch attempt failed, most likely because host capacity is unavailable. The schedule will retry."
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LAUNCH_OUTPUT: ${{ steps.launch.outputs.output }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          echo "Launch attempt failed. The schedule will retry."
+
+          reason="Unknown launch failure. Check the GitHub Actions log for the OCI ServiceError."
+
+          if printf '%s' "$LAUNCH_OUTPUT" | grep -qi 'Out of host capacity\|capacity'; then
+            reason="Out of host capacity. OCI has no available A1 capacity in this AD right now."
+          elif printf '%s' "$LAUNCH_OUTPUT" | grep -qi 'TooManyRequests\|Too many requests'; then
+            reason="Rate limited by OCI. The next scheduled run will retry."
+          elif printf '%s' "$LAUNCH_OUTPUT" | grep -qi 'LimitExceeded'; then
+            reason="LimitExceeded. Check existing resources, quotas, and Always Free limits."
+          elif printf '%s' "$LAUNCH_OUTPUT" | grep -qi 'Invalid ssh public key'; then
+            reason="Invalid OCI_SSH_PUBLIC_KEY. The secret must contain one OpenSSH public key line."
+          fi
+
+          message="OCI A1 launch failed.
+          Reason: $reason
+          Run: $RUN_URL"
+
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="$TELEGRAM_CHAT_ID" \
+              --data-urlencode text="$message"
+          fi
+
+      - name: Notify on workflow failure before launch
+        if: failure() && steps.launch.outcome != 'failure'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          message="OCI A1 workflow failed before or outside the launch attempt.
+          Reason: check the failed GitHub Actions step.
+          Run: $RUN_URL"
+
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="$TELEGRAM_CHAT_ID" \
+              --data-urlencode text="$message"
+          fi
