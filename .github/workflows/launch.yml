@@ -36,6 +36,7 @@ jobs:
             compute instance list
             --compartment-id ${{ secrets.OCI_COMPARTMENT_ID }}
           query: "data[?shape=='VM.Standard.A1.Flex' && \"lifecycle-state\"!='TERMINATED' && \"lifecycle-state\"!='TERMINATING'] | length(@)"
+          silent: false
 
       - name: Stop if A1 instance already exists
         if: steps.check.outputs.raw_output != '0' && steps.check.outputs.raw_output != ''
