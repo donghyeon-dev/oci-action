@@ -63,9 +63,11 @@ jobs:
         env:
           RAW_INSTANCE_ID: ${{ steps.find.outputs.raw_output }}
         run: |
-          instance_id="$RAW_INSTANCE_ID"
-          instance_id="${instance_id%\"}"
-          instance_id="${instance_id#\"}"
+          instance_id="$(printf '%s' "$RAW_INSTANCE_ID" | jq -r '.')"
+          if [ -z "$instance_id" ] || [ "$instance_id" = "null" ]; then
+            echo "::error::No active VM.Standard.A1.Flex instance found in compartment."
+            exit 1
+          fi
           echo "instance_id=$instance_id" >> "$GITHUB_OUTPUT"
 
           data="$("$HOME/.local/bin/oci" compute instance get \
