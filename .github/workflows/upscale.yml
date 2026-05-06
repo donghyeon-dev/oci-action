@@ -1,6 +1,10 @@
 name: Upscale OCI A1 Instance
 
 on:
+  schedule:
+    # Every 30 minutes, mirrors the launch workflow cadence so capacity
+    # or rate-limit failures retry quietly until the resize sticks.
+    - cron: '*/30 * * * *'
   workflow_dispatch:
     inputs:
       ocpus:
@@ -15,6 +19,7 @@ on:
         type: string
 
 permissions:
+  actions: write
   contents: read
 
 concurrency:
@@ -31,8 +36,10 @@ jobs:
       OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
-      TARGET_OCPUS: ${{ inputs.ocpus }}
-      TARGET_MEMORY: ${{ inputs.memory_in_gbs }}
+      # Schedule runs do not pass workflow_dispatch inputs, so fall back
+      # to the Always Free maximum.
+      TARGET_OCPUS: ${{ inputs.ocpus || '4' }}
+      TARGET_MEMORY: ${{ inputs.memory_in_gbs || '24' }}
 
     steps:
       - name: Find A1 instance ID
@@ -87,6 +94,27 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Notify when already at target
+        if: steps.gate.outputs.skip == 'true'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CUR_O: ${{ steps.current.outputs.ocpus }}
+          CUR_M: ${{ steps.current.outputs.memory }}
+        run: |
+          message="OCI A1 instance already at target shape (${CUR_O} OCPU / ${CUR_M} GB). Disabling upscale workflow."
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="$TELEGRAM_CHAT_ID" \
+              --data-urlencode text="$message" > /dev/null
+          fi
+
+      - name: Disable workflow when already at target
+        if: steps.gate.outputs.skip == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow disable upscale.yml -R ${{ github.repository }}
+
       - name: Prepare shape-config JSON
         if: steps.gate.outputs.skip != 'true'
         run: |
@@ -97,6 +125,7 @@ jobs:
       - name: Update shape config
         if: steps.gate.outputs.skip != 'true'
         id: update
+        continue-on-error: true
         env:
           INSTANCE_ID: ${{ steps.current.outputs.instance_id }}
         run: |
@@ -111,19 +140,27 @@ jobs:
 
           printf '%s\n' "$output"
 
+          reason_code="unknown"
           reason="Unknown update failure. Check the GitHub Actions log for the OCI ServiceError."
           if printf '%s' "$output" | grep -qi 'LimitExceeded'; then
+            reason_code="limit_exceeded"
             reason="LimitExceeded. Free tier max is 4 OCPU / 24 GB across all A1 instances."
           elif printf '%s' "$output" | grep -qi 'Out of host capacity\|capacity'; then
+            reason_code="capacity"
             reason="Out of host capacity for the requested shape change."
           elif printf '%s' "$output" | grep -qi 'TooManyRequests\|Too many requests'; then
+            reason_code="rate_limit"
             reason="Rate limited by OCI."
           fi
-          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          {
+            echo "exit_code=$exit_code"
+            echo "reason_code=$reason_code"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
           exit "$exit_code"
 
       - name: Wait for resize to complete
-        if: steps.gate.outputs.skip != 'true'
+        if: steps.gate.outputs.skip != 'true' && steps.update.outcome == 'success'
         env:
           INSTANCE_ID: ${{ steps.current.outputs.instance_id }}
         run: |
@@ -147,7 +184,7 @@ jobs:
           exit 1
 
       - name: Verify new shape config
-        if: steps.gate.outputs.skip != 'true'
+        if: steps.gate.outputs.skip != 'true' && steps.update.outcome == 'success'
         id: verify
         env:
           INSTANCE_ID: ${{ steps.current.outputs.instance_id }}
@@ -159,8 +196,8 @@ jobs:
           echo "memory=$new_memory" >> "$GITHUB_OUTPUT"
           echo "Verified: $new_ocpus OCPU, $new_memory GB"
 
-      - name: Notify on success
-        if: steps.gate.outputs.skip != 'true' && success()
+      - name: Notify on upscale success
+        if: steps.update.outcome == 'success' && steps.verify.outcome == 'success'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -178,17 +215,55 @@ jobs:
               --data-urlencode text="$message" > /dev/null
           fi
 
-      - name: Notify on failure
-        if: failure()
+      - name: Disable workflow on upscale success
+        if: steps.update.outcome == 'success' && steps.verify.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow disable upscale.yml -R ${{ github.repository }}
+
+      - name: Disable workflow on OCI limit exceeded
+        if: steps.update.outputs.reason_code == 'limit_exceeded'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow disable upscale.yml -R ${{ github.repository }}
+          if [ -n "${{ secrets.TELEGRAM_BOT_TOKEN }}" ] && [ -n "${{ secrets.TELEGRAM_CHAT_ID }}" ]; then
+            curl -fsS -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+              -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+              --data-urlencode text="OCI A1 upscale workflow disabled: LimitExceeded. Free tier max is 4 OCPU / 24 GB across all A1 instances." > /dev/null
+          fi
+
+      - name: Log retryable upscale failure
+        if: steps.update.outcome == 'failure'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           REASON: ${{ steps.update.outputs.reason }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          echo "Upscale attempt failed. The schedule will retry."
+
           message="OCI A1 upscale failed.
           Reason: ${REASON:-See GitHub Actions log.}
           Run: $RUN_URL"
+
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="$TELEGRAM_CHAT_ID" \
+              --data-urlencode text="$message" > /dev/null
+          fi
+
+      - name: Notify on workflow failure outside update
+        if: failure() && steps.update.outcome != 'failure'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          message="OCI A1 upscale workflow failed before or outside the update attempt.
+          Reason: check the failed GitHub Actions step.
+          Run: $RUN_URL"
+
           if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
             curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
               -d chat_id="$TELEGRAM_CHAT_ID" \

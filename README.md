@@ -14,7 +14,7 @@ The workflow is based on `oci-a1-github-actions-plan.html` and is designed to:
 ## Files
 
 - `.github/workflows/launch.yml` - scheduled and manually triggerable launch workflow.
-- `.github/workflows/upscale.yml` - manually triggered workflow that resizes the existing A1 instance to the Always Free maximum (4 OCPU / 24 GB) or a custom target.
+- `.github/workflows/upscale.yml` - scheduled and manually triggerable workflow that resizes the existing A1 instance to the Always Free maximum (4 OCPU / 24 GB) or a custom target.
 - `docs/secrets.md` - required GitHub repository secrets.
 - `oci-a1-github-actions-plan.html` - original implementation plan.
 
@@ -30,13 +30,17 @@ The scheduled workflow will continue every 15 minutes until it succeeds or disab
 
 ## Upscaling to the Always Free maximum
 
-After the launch workflow has created the instance at the safe minimum (1 OCPU / 6 GB), trigger **Upscale OCI A1 Instance** manually from the Actions tab to resize it to the Always Free maximum.
+After the launch workflow has created the instance at the safe minimum (1 OCPU / 6 GB), the **Upscale OCI A1 Instance** workflow resizes it to the Always Free maximum.
 
-- Defaults to `ocpus=4` and `memory_in_gbs=24`, which fully consumes the Always Free A1 quota for a single instance.
+- Runs every 30 minutes on schedule and is also manually triggerable from the Actions tab.
+- Defaults to `ocpus=4` and `memory_in_gbs=24`, which fully consumes the Always Free A1 quota for a single instance. Manual runs accept overrides through workflow inputs.
 - Looks up the existing `VM.Standard.A1.Flex` instance in `OCI_COMPARTMENT_ID`, calls `oci compute instance update --shape-config`, then polls until the new shape is reported and the instance is back in `RUNNING`.
-- Sends a Telegram message with the before/after shape on success, and a failure notice (with reason hint for `LimitExceeded`, capacity, or rate-limit errors) on failure.
+- Disables itself after a successful resize, when the instance is already at the target shape, or on a `LimitExceeded` error. Capacity and rate-limit failures are retried on the next schedule.
+- Sends Telegram notifications mirroring the launch workflow: success with before/after shape, retryable failures with a reason hint, and permanent disable on `LimitExceeded`.
 
 OCI applies Flex shape changes online when possible and otherwise reboots the instance, so expect a brief reboot and short SSH downtime.
+
+GitHub Actions only runs scheduled workflows from the repository's default branch, so the cron schedule activates once `upscale.yml` is merged into the default branch.
 
 ## Security
 
