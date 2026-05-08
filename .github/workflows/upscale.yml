@@ -1,10 +1,6 @@
 name: Upscale OCI A1 Instance
 
 on:
-  schedule:
-    # Every 30 minutes, mirrors the launch workflow cadence so capacity
-    # or rate-limit failures retry quietly until the resize sticks.
-    - cron: '*/30 * * * *'
   workflow_dispatch:
     inputs:
       ocpus:
