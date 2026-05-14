@@ -15,6 +15,7 @@ The workflow is based on `oci-a1-github-actions-plan.html` and is designed to:
 
 - `.github/workflows/launch.yml` - scheduled and manually triggerable launch workflow.
 - `.github/workflows/upscale.yml` - scheduled and manually triggerable workflow that resizes the existing A1 instance to the Always Free maximum (4 OCPU / 24 GB) or a custom target.
+- `.github/workflows/monitor-usage.yml` - scheduled and manually triggerable workflow that monitors A1 shape allocation, boot/block volume capacity, monthly VNIC egress, and Usage API cost rows against Always Free thresholds.
 - `docs/secrets.md` - required GitHub repository secrets.
 - `oci-a1-github-actions-plan.html` - original implementation plan.
 
@@ -41,6 +42,22 @@ After the launch workflow has created the instance at the safe minimum (1 OCPU /
 OCI applies Flex shape changes online when possible and otherwise reboots the instance, so expect a brief reboot and short SSH downtime.
 
 GitHub Actions only runs scheduled workflows from the repository's default branch, so the cron schedule activates once `upscale.yml` is merged into the default branch.
+
+## Monitoring Always Free usage
+
+The **Monitor OCI Free Tier Usage** workflow checks the active Always Free risk areas on a schedule and on manual dispatch.
+
+- Runs every 6 hours and can be triggered from the Actions tab.
+- Reads raw OCI data from Compute, Block Volume, VNIC Monitoring metrics, and Usage API.
+- Validates the computed monitor values by printing the raw instance shape rows, raw volume rows, VNIC metric subtotals, and Usage API billing-side rows in the workflow log.
+- Fails the run on critical threshold breaches and sends a Telegram notification for warning or critical states.
+- Defaults:
+  - A1 allocation critical threshold: more than 4 OCPU or 24 GB memory.
+  - Boot + block volume critical threshold: more than 200 GB; warning from 180 GB.
+  - Monthly VNIC egress warning: 8 TiB; critical: 10 TiB.
+  - Usage API computed amount greater than zero is critical.
+
+The VNIC metric uses `VnicToNetworkBytes` from the `oci_vcn` namespace as a near-real-time traffic signal. The Usage API rows are included as the billing-side cross-check, but they can lag behind live metrics.
 
 ## Security
 

@@ -1,0 +1,360 @@
+name: Monitor OCI Free Tier Usage
+
+on:
+  schedule:
+    # Run every 6 hours. GitHub schedules use UTC.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      network_warning_tb:
+        description: 'Warn when this month VNIC egress reaches this many TiB'
+        required: false
+        default: '8'
+        type: string
+      network_critical_tb:
+        description: 'Fail when this month VNIC egress reaches this many TiB'
+        required: false
+        default: '10'
+        type: string
+      block_warning_gb:
+        description: 'Warn when block + boot volume capacity reaches this many GB'
+        required: false
+        default: '180'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oci-free-tier-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      OCI_COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_ID }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      NETWORK_WARNING_TB: ${{ inputs.network_warning_tb || '8' }}
+      NETWORK_CRITICAL_TB: ${{ inputs.network_critical_tb || '10' }}
+      BLOCK_WARNING_GB: ${{ inputs.block_warning_gb || '180' }}
+      A1_FREE_OCPUS: '4'
+      A1_FREE_MEMORY_GB: '24'
+      BLOCK_FREE_GB: '200'
+
+    steps:
+      - name: Initialize OCI CLI from repository secrets
+        uses: oracle-actions/run-oci-cli-command@v1.3.2
+        with:
+          command: iam region list
+          silent: true
+
+      - name: Collect raw OCI usage data
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/oci-monitor"
+
+          month_start="$(date -u +%Y-%m-01T00:00:00Z)"
+          now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "MONTH_START=$month_start" >> "$GITHUB_ENV"
+          echo "MONTH_END=$now" >> "$GITHUB_ENV"
+
+          echo "Collecting active A1 instances..."
+          "$HOME/.local/bin/oci" compute instance list \
+            --compartment-id "$OCI_COMPARTMENT_ID" \
+            --all \
+            --output json \
+            > "$RUNNER_TEMP/oci-monitor/instances.json"
+
+          echo "Collecting availability domains..."
+          "$HOME/.local/bin/oci" iam availability-domain list \
+            --compartment-id "$OCI_CLI_TENANCY" \
+            --all \
+            --output json \
+            > "$RUNNER_TEMP/oci-monitor/availability-domains.json"
+
+          echo "Collecting boot volumes and block volumes..."
+          jq -r '.data[].name' "$RUNNER_TEMP/oci-monitor/availability-domains.json" | while read -r ad; do
+            "$HOME/.local/bin/oci" bv boot-volume list \
+              --compartment-id "$OCI_COMPARTMENT_ID" \
+              --availability-domain "$ad" \
+              --all \
+              --output json \
+              > "$RUNNER_TEMP/oci-monitor/boot-volumes-${ad//[^A-Za-z0-9_.-]/_}.json"
+
+            "$HOME/.local/bin/oci" bv volume list \
+              --compartment-id "$OCI_COMPARTMENT_ID" \
+              --availability-domain "$ad" \
+              --all \
+              --output json \
+              > "$RUNNER_TEMP/oci-monitor/block-volumes-${ad//[^A-Za-z0-9_.-]/_}.json"
+          done
+
+          echo "Collecting Usage API rows for this month..."
+          set +e
+          "$HOME/.local/bin/oci" usage-api usage-summary request-summarized-usages \
+            --tenant-id "$OCI_CLI_TENANCY" \
+            --time-usage-started "$month_start" \
+            --time-usage-ended "$now" \
+            --granularity MONTHLY \
+            --query-type USAGE \
+            --group-by '["service","skuName","unit","resourceId"]' \
+            --is-aggregate-by-time true \
+            --output json \
+            > "$RUNNER_TEMP/oci-monitor/usage-api.json"
+          usage_exit=$?
+          set -e
+          echo "$usage_exit" > "$RUNNER_TEMP/oci-monitor/usage-api.exit"
+          if [ "$usage_exit" -ne 0 ]; then
+            echo "::warning::Usage API query failed. Continuing with Compute/Block/VNIC metric checks."
+            printf '{"data":[]}' > "$RUNNER_TEMP/oci-monitor/usage-api.json"
+          fi
+
+      - name: Summarize and validate monitor values against raw OCI data
+        id: summarize
+        shell: python
+        run: |
+          import glob, json, os, subprocess, sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          temp = Path(os.environ['RUNNER_TEMP']) / 'oci-monitor'
+          oci = str(Path.home() / '.local/bin/oci')
+          compartment_id = os.environ['OCI_COMPARTMENT_ID']
+          month_start = os.environ['MONTH_START']
+          month_end = os.environ['MONTH_END']
+
+          def load_json(path, default):
+              try:
+                  return json.loads(Path(path).read_text())
+              except Exception:
+                  return default
+
+          def run_json(args):
+              out = subprocess.check_output([oci] + args, text=True)
+              return json.loads(out)
+
+          def num(value, default=0.0):
+              try:
+                  return float(value)
+              except (TypeError, ValueError):
+                  return default
+
+          instances_raw = load_json(temp / 'instances.json', {'data': []}).get('data', [])
+          a1_instances = [
+              i for i in instances_raw
+              if i.get('shape') == 'VM.Standard.A1.Flex'
+              and i.get('lifecycle-state') not in ('TERMINATED', 'TERMINATING')
+          ]
+          a1_ocpus = sum(num((i.get('shape-config') or {}).get('ocpus')) for i in a1_instances)
+          a1_memory = sum(num((i.get('shape-config') or {}).get('memory-in-gbs')) for i in a1_instances)
+
+          volume_rows = []
+          for pattern, kind in [('boot-volumes-*.json', 'boot'), ('block-volumes-*.json', 'block')]:
+              for path in glob.glob(str(temp / pattern)):
+                  for vol in load_json(path, {'data': []}).get('data', []):
+                      state = vol.get('lifecycle-state')
+                      if state in ('TERMINATED', 'TERMINATING'):
+                          continue
+                      volume_rows.append({
+                          'kind': kind,
+                          'display_name': vol.get('display-name'),
+                          'id': vol.get('id'),
+                          'size_gb': num(vol.get('size-in-gbs')),
+                          'state': state,
+                      })
+          total_volume_gb = sum(v['size_gb'] for v in volume_rows)
+
+          vnic_ids = []
+          for inst in a1_instances:
+              attachments = run_json([
+                  'compute', 'vnic-attachment', 'list',
+                  '--compartment-id', compartment_id,
+                  '--instance-id', inst['id'],
+                  '--all', '--output', 'json'
+              ]).get('data', [])
+              for attachment in attachments:
+                  if attachment.get('lifecycle-state') == 'ATTACHED' and attachment.get('vnic-id'):
+                      vnic_ids.append(attachment['vnic-id'])
+          vnic_ids = sorted(set(vnic_ids))
+
+          # VnicToNetworkBytes is the raw OCI Monitoring metric for bytes sent by each VNIC.
+          # This is used as a near-real-time approximation for monthly outbound traffic.
+          # The Usage API cost/usage rows below are kept as the billing-side cross-check.
+          vnic_egress_bytes = 0.0
+          vnic_metric_rows = []
+          for vnic_id in vnic_ids:
+              query = f'VnicToNetworkBytes[1h]{{resourceId = "{vnic_id}"}}.sum()'
+              data = run_json([
+                  'monitoring', 'metric-data', 'summarize-metrics-data',
+                  '--compartment-id', compartment_id,
+                  '--namespace', 'oci_vcn',
+                  '--query-text', query,
+                  '--start-time', month_start,
+                  '--end-time', month_end,
+                  '--resolution', '1h',
+                  '--output', 'json'
+              ]).get('data', [])
+              subtotal = 0.0
+              for series in data:
+                  for point in series.get('aggregated-datapoints', []) or []:
+                      subtotal += num(point.get('value'))
+              vnic_metric_rows.append({'vnic_id': vnic_id, 'egress_bytes': subtotal})
+              vnic_egress_bytes += subtotal
+
+          usage_exit = int((temp / 'usage-api.exit').read_text().strip() or '1')
+          usage_raw = load_json(temp / 'usage-api.json', {'data': []}).get('data', [])
+          usage_rows = []
+          outbound_usage_quantity = 0.0
+          usage_cost = 0.0
+          for row in usage_raw:
+              service = str(row.get('service') or '')
+              sku = str(row.get('sku-name') or row.get('skuName') or '')
+              unit = str(row.get('unit') or '')
+              qty = num(row.get('computed-quantity') or row.get('computedQuantity') or row.get('quantity'))
+              cost = num(row.get('computed-amount') or row.get('computedAmount'))
+              usage_cost += cost
+              text = f'{service} {sku} {unit}'.lower()
+              if 'outbound' in text or 'data transfer' in text:
+                  outbound_usage_quantity += qty
+                  usage_rows.append({'service': service, 'sku': sku, 'unit': unit, 'quantity': qty, 'cost': cost})
+
+          summary = {
+              'period_utc': {'start': month_start, 'end': month_end},
+              'a1': {
+                  'active_instance_count': len(a1_instances),
+                  'ocpus': a1_ocpus,
+                  'memory_gb': a1_memory,
+                  'free_ocpus': num(os.environ['A1_FREE_OCPUS']),
+                  'free_memory_gb': num(os.environ['A1_FREE_MEMORY_GB']),
+                  'instances': [
+                      {
+                          'display_name': i.get('display-name'),
+                          'state': i.get('lifecycle-state'),
+                          'ocpus': num((i.get('shape-config') or {}).get('ocpus')),
+                          'memory_gb': num((i.get('shape-config') or {}).get('memory-in-gbs')),
+                          'id': i.get('id'),
+                      }
+                      for i in a1_instances
+                  ],
+              },
+              'block_storage': {
+                  'total_gb': total_volume_gb,
+                  'free_gb': num(os.environ['BLOCK_FREE_GB']),
+                  'volumes': volume_rows,
+              },
+              'network': {
+                  'vnic_to_network_bytes': vnic_egress_bytes,
+                  'vnic_to_network_gib': vnic_egress_bytes / (1024 ** 3),
+                  'vnic_to_network_tib': vnic_egress_bytes / (1024 ** 4),
+                  'free_tib': 10.0,
+                  'warning_tib': num(os.environ['NETWORK_WARNING_TB']),
+                  'critical_tib': num(os.environ['NETWORK_CRITICAL_TB']),
+                  'vnic_metric_rows': vnic_metric_rows,
+                  'usage_api_exit': usage_exit,
+                  'usage_api_outbound_rows': usage_rows,
+                  'usage_api_outbound_quantity': outbound_usage_quantity,
+                  'usage_api_total_computed_amount': usage_cost,
+              },
+          }
+
+          (temp / 'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True))
+
+          print('=== RAW OCI -> COMPUTED VALUE VALIDATION ===')
+          print(f"A1 raw instances counted: {len(a1_instances)}")
+          for item in summary['a1']['instances']:
+              print(f"  - {item['display_name']} state={item['state']} ocpus={item['ocpus']} memory_gb={item['memory_gb']}")
+          print(f"Computed A1 totals from raw instance shape-config: ocpus={a1_ocpus}, memory_gb={a1_memory}")
+          print(f"Computed volume total from raw boot/block volume list: {total_volume_gb} GB across {len(volume_rows)} volumes")
+          for row in vnic_metric_rows:
+              print(f"VNIC metric raw subtotal: {row['vnic_id']} VnicToNetworkBytes={row['egress_bytes']:.0f}")
+          print(f"Computed monthly VNIC egress: {vnic_egress_bytes:.0f} bytes = {summary['network']['vnic_to_network_gib']:.3f} GiB = {summary['network']['vnic_to_network_tib']:.6f} TiB")
+          print(f"Usage API exit={usage_exit}; outbound billing-side rows matched={len(usage_rows)}; outbound_quantity={outbound_usage_quantity}; total_computed_amount={usage_cost}")
+          for row in usage_rows[:20]:
+              print(f"  usage row: service={row['service']} sku={row['sku']} unit={row['unit']} quantity={row['quantity']} cost={row['cost']}")
+
+          status = 'ok'
+          messages = []
+          if a1_ocpus > summary['a1']['free_ocpus'] or a1_memory > summary['a1']['free_memory_gb']:
+              status = 'critical'
+              messages.append(f"A1 allocation exceeds Always Free: {a1_ocpus} OCPU / {a1_memory} GB")
+          if total_volume_gb > summary['block_storage']['free_gb']:
+              status = 'critical'
+              messages.append(f"Block+boot volumes exceed Always Free: {total_volume_gb} GB")
+          elif total_volume_gb >= num(os.environ['BLOCK_WARNING_GB']):
+              if status == 'ok':
+                  status = 'warning'
+              messages.append(f"Block+boot volumes near limit: {total_volume_gb} GB")
+          tib = summary['network']['vnic_to_network_tib']
+          if tib >= num(os.environ['NETWORK_CRITICAL_TB']):
+              status = 'critical'
+              messages.append(f"Monthly VNIC egress reached critical threshold: {tib:.3f} TiB")
+          elif tib >= num(os.environ['NETWORK_WARNING_TB']):
+              if status == 'ok':
+                  status = 'warning'
+              messages.append(f"Monthly VNIC egress reached warning threshold: {tib:.3f} TiB")
+          if usage_cost > 0:
+              status = 'critical'
+              messages.append(f"Usage API reports non-zero computed amount: {usage_cost}")
+
+          if not messages:
+              messages.append('All monitored values are within configured thresholds.')
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+              fh.write(f"status={status}\n")
+              fh.write(f"a1_ocpus={a1_ocpus}\n")
+              fh.write(f"a1_memory_gb={a1_memory}\n")
+              fh.write(f"block_total_gb={total_volume_gb}\n")
+              fh.write(f"vnic_egress_tib={tib:.6f}\n")
+              fh.write(f"usage_cost={usage_cost}\n")
+              fh.write('message<<EOF\n' + '\n'.join(messages) + '\nEOF\n')
+
+      - name: Upload raw monitor data
+        uses: actions/upload-artifact@v4
+        with:
+          name: oci-monitor-raw-data
+          path: ${{ runner.temp }}/oci-monitor/*.json
+          retention-days: 14
+
+      - name: Notify when warning or critical
+        if: steps.summarize.outputs.status != 'ok'
+        env:
+          STATUS: ${{ steps.summarize.outputs.status }}
+          MESSAGE: ${{ steps.summarize.outputs.message }}
+          A1_OCPUS: ${{ steps.summarize.outputs.a1_ocpus }}
+          A1_MEMORY_GB: ${{ steps.summarize.outputs.a1_memory_gb }}
+          BLOCK_TOTAL_GB: ${{ steps.summarize.outputs.block_total_gb }}
+          VNIC_EGRESS_TIB: ${{ steps.summarize.outputs.vnic_egress_tib }}
+          USAGE_COST: ${{ steps.summarize.outputs.usage_cost }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          text="OCI Free Tier monitor: ${STATUS}
+          ${MESSAGE}
+
+          A1: ${A1_OCPUS} OCPU / ${A1_MEMORY_GB} GB
+          Block+boot volumes: ${BLOCK_TOTAL_GB} GB
+          Month VNIC egress: ${VNIC_EGRESS_TIB} TiB
+          Usage API computed amount: ${USAGE_COST}
+          Run: ${RUN_URL}"
+
+          if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+            curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="$TELEGRAM_CHAT_ID" \
+              --data-urlencode text="$text" > /dev/null
+          else
+            echo "$text"
+          fi
+
+      - name: Fail on critical threshold breach
+        if: steps.summarize.outputs.status == 'critical'
+        run: |
+          echo "::error::OCI Free Tier monitor detected a critical threshold breach."
+          exit 1
