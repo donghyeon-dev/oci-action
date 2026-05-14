@@ -15,7 +15,7 @@ Add these under repository **Settings -> Secrets and variables -> Actions -> New
 | `OCI_AVAILABILITY_DOMAIN` | Availability domain, for example `nHas:AP-CHUNCHEON-1-AD-1`. |
 | `OCI_SSH_PUBLIC_KEY` | One-line SSH public key, such as `ssh-ed25519 ...` or `ssh-rsa ...`. |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token. |
-| `TELEGRAM_CHAT_ID` | Telegram chat ID that receives notifications. |
+| `TELEGRAM_CHAT_ID` | Telegram chat ID that receives notifications, including every monitor workflow run. |
 
 ## Notes
 
