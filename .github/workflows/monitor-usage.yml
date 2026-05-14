@@ -69,8 +69,12 @@ jobs:
 
           month_start="$(date -u +%Y-%m-01T00:00:00Z)"
           now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          # Usage API MONTHLY queries require UTC hour/minute/second/fraction precision to be zero.
+          # Use the current UTC day boundary as the billing-side end point. Live VNIC metrics still use now.
+          usage_end="$(date -u +%Y-%m-%dT00:00:00Z)"
           echo "MONTH_START=$month_start" >> "$GITHUB_ENV"
           echo "MONTH_END=$now" >> "$GITHUB_ENV"
+          echo "USAGE_END=$usage_end" >> "$GITHUB_ENV"
 
           echo "Collecting active A1 instances..."
           "$HOME/.local/bin/oci" compute instance list \
@@ -108,18 +112,20 @@ jobs:
           "$HOME/.local/bin/oci" usage-api usage-summary request-summarized-usages \
             --tenant-id "$OCI_CLI_TENANCY" \
             --time-usage-started "$month_start" \
-            --time-usage-ended "$now" \
+            --time-usage-ended "$usage_end" \
             --granularity MONTHLY \
             --query-type USAGE \
             --group-by '["service","skuName","unit","resourceId"]' \
             --is-aggregate-by-time true \
             --output json \
-            > "$RUNNER_TEMP/oci-monitor/usage-api.json"
+            > "$RUNNER_TEMP/oci-monitor/usage-api.json" \
+            2> "$RUNNER_TEMP/oci-monitor/usage-api.err"
           usage_exit=$?
           set -e
           echo "$usage_exit" > "$RUNNER_TEMP/oci-monitor/usage-api.exit"
           if [ "$usage_exit" -ne 0 ]; then
             echo "::warning::Usage API query failed. Continuing with Compute/Block/VNIC metric checks."
+            sed -n '1,80p' "$RUNNER_TEMP/oci-monitor/usage-api.err" || true
             printf '{"data":[]}' > "$RUNNER_TEMP/oci-monitor/usage-api.json"
           fi
 
@@ -326,7 +332,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: oci-monitor-raw-data
-          path: ${{ runner.temp }}/oci-monitor/*.json
+          path: |
+            ${{ runner.temp }}/oci-monitor/*.json
+            ${{ runner.temp }}/oci-monitor/*.err
+            ${{ runner.temp }}/oci-monitor/*.exit
           retention-days: 14
 
       - name: Notify when warning or critical
