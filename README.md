@@ -47,7 +47,7 @@ GitHub Actions only runs scheduled workflows from the repository's default branc
 
 The **Monitor OCI Free Tier Usage** workflow checks the active Always Free risk areas on a schedule and on manual dispatch.
 
-- Runs every 6 hours and can be triggered from the Actions tab.
+- Runs once per day at 00:17 UTC and can be triggered from the Actions tab.
 - Reads raw OCI data from Compute, Block Volume, VNIC Monitoring metrics, and Usage API.
 - Validates the computed monitor values by printing the raw instance shape rows, raw volume rows, VNIC metric subtotals, and Usage API billing-side rows in the workflow log.
 - Computes percentage-based risk for A1 OCPU, A1 memory, boot/block volume capacity, and monthly VNIC egress against Always Free limits.

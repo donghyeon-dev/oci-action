@@ -8,8 +8,8 @@ on:
       - '.github/workflows/monitor-usage.yml'
       - 'README.md'
   schedule:
-    # Run every 6 hours. GitHub schedules use UTC.
-    - cron: '17 */6 * * *'
+    # Run once per day at 00:17 UTC. GitHub schedules use UTC.
+    - cron: '17 0 * * *'
   workflow_dispatch:
     inputs:
       network_warning_tb:
