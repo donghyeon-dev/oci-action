@@ -51,7 +51,7 @@ The **Monitor OCI Free Tier Usage** workflow checks the active Always Free risk 
 - Reads raw OCI data from Compute, Block Volume, VNIC Monitoring metrics, and Usage API.
 - Validates the computed monitor values by printing the raw instance shape rows, raw volume rows, VNIC metric subtotals, and Usage API billing-side rows in the workflow log.
 - Computes percentage-based risk for A1 OCPU, A1 memory, boot/block volume capacity, and monthly VNIC egress against Always Free limits.
-- Sends a Telegram summary on every run when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are configured.
+- Sends a Korean Telegram summary with usage percentages and thresholds on every run when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are configured.
 - Fails the run on critical threshold breaches.
 - Defaults:
   - A1 allocation critical threshold: more than 4 OCPU or 24 GB memory.
@@ -61,7 +61,7 @@ The **Monitor OCI Free Tier Usage** workflow checks the active Always Free risk 
 
 The VNIC metric uses `VnicToNetworkBytes` from the `oci_vcn` namespace as a near-real-time traffic signal. The Usage API rows are included as the billing-side cross-check, but they can lag behind live metrics.
 
-Monitor notifications use the existing Telegram bot secrets (`TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`) and are sent on every monitor workflow run, including OK runs, so no separate Discord webhook setup is required.
+Monitor notifications use the existing Telegram bot secrets (`TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`) and are sent in Korean on every monitor workflow run, including OK runs. Each message includes current usage percentages and the warning/critical thresholds, so no separate Discord webhook setup is required.
 
 ## Security
 

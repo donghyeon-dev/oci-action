@@ -398,21 +398,41 @@ jobs:
           python3 - <<'PY' > "$RUNNER_TEMP/telegram-message.txt"
           import os
 
-          status = os.environ['STATUS']
+          def env(name, default=''):
+              return os.environ.get(name, default)
+
+          status = env('STATUS')
+          status_ko = {'ok': '정상', 'warning': '주의', 'critical': '위험'}.get(status, status or '알 수 없음')
           emoji = {'ok': '🟢', 'warning': '🟡', 'critical': '🔴'}.get(status, '⚪')
-          text = f"""{emoji} OCI Free Tier monitor: {status.upper()} — risk {os.environ['OVERALL_RISK_PERCENT']}%
 
-          {os.environ['MESSAGE']}
+          message_ko = {
+              'ok': '모든 모니터링 값이 설정된 임계치 안에 있습니다.',
+              'warning': '일부 항목이 주의 임계치에 도달했습니다.',
+              'critical': '일부 항목이 위험 임계치를 넘었습니다.',
+          }.get(status, env('MESSAGE'))
 
-          Overall risk: {os.environ['OVERALL_RISK_PERCENT']}%
-          A1 OCPU: {os.environ['A1_OCPUS']} / 4 ({os.environ['A1_OCPUS_PERCENT']}%)
-          A1 Memory: {os.environ['A1_MEMORY_GB']} / 24 GB ({os.environ['A1_MEMORY_PERCENT']}%)
-          Block + boot volumes: {os.environ['BLOCK_TOTAL_GB']} / 200 GB ({os.environ['BLOCK_PERCENT']}%)
-          Monthly VNIC egress: {os.environ['VNIC_EGRESS_TIB']} / 10 TiB ({os.environ['NETWORK_PERCENT']}%)
-          Usage API computed amount: {os.environ['USAGE_COST']}
+          text = f"""{emoji} OCI 무료 티어 모니터링: {status_ko} — 전체 위험도 {env('OVERALL_RISK_PERCENT')}%
 
-          Note: A1 at 100% means the full Always Free A1 allocation is in use, not necessarily overage.
-          Run: {os.environ['RUN_URL']}"""
+          {message_ko}
+
+          📊 현재 사용량
+          - 전체 위험도: {env('OVERALL_RISK_PERCENT')}%
+          - A1 OCPU: {env('A1_OCPUS')} / {env('A1_FREE_OCPUS')} ({env('A1_OCPUS_PERCENT')}%)
+          - A1 메모리: {env('A1_MEMORY_GB')} / {env('A1_FREE_MEMORY_GB')} GB ({env('A1_MEMORY_PERCENT')}%)
+          - 부트+블록 볼륨: {env('BLOCK_TOTAL_GB')} / {env('BLOCK_FREE_GB')} GB ({env('BLOCK_PERCENT')}%)
+          - 월간 VNIC 송신량: {env('VNIC_EGRESS_TIB')} / 10 TiB ({env('NETWORK_PERCENT')}%)
+          - Usage API 계산 금액: {env('USAGE_COST')}
+
+          🚧 임계치
+          - A1 위험: {env('A1_FREE_OCPUS')} OCPU 초과 또는 {env('A1_FREE_MEMORY_GB')} GB 메모리 초과
+          - 볼륨 주의: {env('BLOCK_WARNING_GB')} GB 이상
+          - 볼륨 위험: {env('BLOCK_FREE_GB')} GB 초과
+          - 네트워크 주의: 월 {env('NETWORK_WARNING_TB')} TiB 이상
+          - 네트워크 위험: 월 {env('NETWORK_CRITICAL_TB')} TiB 이상
+          - 과금 위험: Usage API 계산 금액이 0보다 큼
+
+          참고: A1 100%는 무료 A1 한도 전체를 사용 중이라는 뜻이며, 그 자체로 초과 과금은 아닙니다.
+          실행 로그: {env('RUN_URL')}"""
           print('\n'.join(line.strip() for line in text.splitlines()))
           PY
 
