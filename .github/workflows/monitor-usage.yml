@@ -222,11 +222,18 @@ jobs:
               vnic_egress_bytes += subtotal
 
           usage_exit = int((temp / 'usage-api.exit').read_text().strip() or '1')
-          usage_raw = load_json(temp / 'usage-api.json', {'data': []}).get('data', [])
+          usage_obj = load_json(temp / 'usage-api.json', {'data': []})
+          usage_raw = usage_obj.get('data', [])
+          if isinstance(usage_raw, dict):
+              usage_raw = usage_raw.get('items') or usage_raw.get('usage') or []
+          if not isinstance(usage_raw, list):
+              usage_raw = []
           usage_rows = []
           outbound_usage_quantity = 0.0
           usage_cost = 0.0
           for row in usage_raw:
+              if not isinstance(row, dict):
+                  continue
               service = str(row.get('service') or '')
               sku = str(row.get('sku-name') or row.get('skuName') or '')
               unit = str(row.get('unit') or '')
