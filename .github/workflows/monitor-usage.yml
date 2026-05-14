@@ -48,6 +48,8 @@ jobs:
       OCI_COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_ID }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      # Create a Discord webhook in the #instance-monitoring channel and save it as this repository secret.
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       NETWORK_WARNING_TB: ${{ inputs.network_warning_tb || '8' }}
       NETWORK_CRITICAL_TB: ${{ inputs.network_critical_tb || '10' }}
       BLOCK_WARNING_GB: ${{ inputs.block_warning_gb || '180' }}
@@ -245,14 +247,39 @@ jobs:
                   outbound_usage_quantity += qty
                   usage_rows.append({'service': service, 'sku': sku, 'unit': unit, 'quantity': qty, 'cost': cost})
 
+          def pct(used, limit):
+              limit = num(limit)
+              if limit <= 0:
+                  return 0.0
+              return (num(used) / limit) * 100.0
+
+          a1_free_ocpus = num(os.environ['A1_FREE_OCPUS'])
+          a1_free_memory_gb = num(os.environ['A1_FREE_MEMORY_GB'])
+          block_free_gb = num(os.environ['BLOCK_FREE_GB'])
+          network_free_tib = 10.0
+          a1_ocpus_percent = pct(a1_ocpus, a1_free_ocpus)
+          a1_memory_percent = pct(a1_memory, a1_free_memory_gb)
+          block_percent = pct(total_volume_gb, block_free_gb)
+          network_tib = vnic_egress_bytes / (1024 ** 4)
+          network_percent = pct(network_tib, network_free_tib)
+          overall_risk_percent = max(a1_ocpus_percent, a1_memory_percent, block_percent, network_percent)
+
           summary = {
               'period_utc': {'start': month_start, 'end': month_end},
+              'risk': {
+                  'overall_percent': overall_risk_percent,
+                  'a1_ocpus_percent': a1_ocpus_percent,
+                  'a1_memory_percent': a1_memory_percent,
+                  'block_storage_percent': block_percent,
+                  'network_egress_percent': network_percent,
+                  'note': 'Percentages compare current monitored usage with Always Free thresholds. A1 at 100% means the full free A1 allocation is in use, not overage.',
+              },
               'a1': {
                   'active_instance_count': len(a1_instances),
                   'ocpus': a1_ocpus,
                   'memory_gb': a1_memory,
-                  'free_ocpus': num(os.environ['A1_FREE_OCPUS']),
-                  'free_memory_gb': num(os.environ['A1_FREE_MEMORY_GB']),
+                  'free_ocpus': a1_free_ocpus,
+                  'free_memory_gb': a1_free_memory_gb,
                   'instances': [
                       {
                           'display_name': i.get('display-name'),
@@ -266,14 +293,14 @@ jobs:
               },
               'block_storage': {
                   'total_gb': total_volume_gb,
-                  'free_gb': num(os.environ['BLOCK_FREE_GB']),
+                  'free_gb': block_free_gb,
                   'volumes': volume_rows,
               },
               'network': {
                   'vnic_to_network_bytes': vnic_egress_bytes,
                   'vnic_to_network_gib': vnic_egress_bytes / (1024 ** 3),
-                  'vnic_to_network_tib': vnic_egress_bytes / (1024 ** 4),
-                  'free_tib': 10.0,
+                  'vnic_to_network_tib': network_tib,
+                  'free_tib': network_free_tib,
                   'warning_tib': num(os.environ['NETWORK_WARNING_TB']),
                   'critical_tib': num(os.environ['NETWORK_CRITICAL_TB']),
                   'vnic_metric_rows': vnic_metric_rows,
@@ -295,6 +322,7 @@ jobs:
           for row in vnic_metric_rows:
               print(f"VNIC metric raw subtotal: {row['vnic_id']} VnicToNetworkBytes={row['egress_bytes']:.0f}")
           print(f"Computed monthly VNIC egress: {vnic_egress_bytes:.0f} bytes = {summary['network']['vnic_to_network_gib']:.3f} GiB = {summary['network']['vnic_to_network_tib']:.6f} TiB")
+          print(f"Risk percentages: overall={overall_risk_percent:.1f}% a1_ocpus={a1_ocpus_percent:.1f}% a1_memory={a1_memory_percent:.1f}% block={block_percent:.1f}% network={network_percent:.3f}%")
           print(f"Usage API exit={usage_exit}; outbound billing-side rows matched={len(usage_rows)}; outbound_quantity={outbound_usage_quantity}; total_computed_amount={usage_cost}")
           for row in usage_rows[:20]:
               print(f"  usage row: service={row['service']} sku={row['sku']} unit={row['unit']} quantity={row['quantity']} cost={row['cost']}")
@@ -333,6 +361,11 @@ jobs:
               fh.write(f"block_total_gb={total_volume_gb}\n")
               fh.write(f"vnic_egress_tib={tib:.6f}\n")
               fh.write(f"usage_cost={usage_cost}\n")
+              fh.write(f"overall_risk_percent={overall_risk_percent:.1f}\n")
+              fh.write(f"a1_ocpus_percent={a1_ocpus_percent:.1f}\n")
+              fh.write(f"a1_memory_percent={a1_memory_percent:.1f}\n")
+              fh.write(f"block_percent={block_percent:.1f}\n")
+              fh.write(f"network_percent={network_percent:.3f}\n")
               fh.write('message<<EOF\n' + '\n'.join(messages) + '\nEOF\n')
 
       - name: Upload raw monitor data
@@ -345,7 +378,64 @@ jobs:
             ${{ runner.temp }}/oci-monitor/*.exit
           retention-days: 14
 
-      - name: Notify when warning or critical
+      - name: Notify Discord with usage percentages
+        if: always() && steps.summarize.outputs.status != ''
+        env:
+          STATUS: ${{ steps.summarize.outputs.status }}
+          MESSAGE: ${{ steps.summarize.outputs.message }}
+          OVERALL_RISK_PERCENT: ${{ steps.summarize.outputs.overall_risk_percent }}
+          A1_OCPUS: ${{ steps.summarize.outputs.a1_ocpus }}
+          A1_MEMORY_GB: ${{ steps.summarize.outputs.a1_memory_gb }}
+          BLOCK_TOTAL_GB: ${{ steps.summarize.outputs.block_total_gb }}
+          VNIC_EGRESS_TIB: ${{ steps.summarize.outputs.vnic_egress_tib }}
+          USAGE_COST: ${{ steps.summarize.outputs.usage_cost }}
+          A1_OCPUS_PERCENT: ${{ steps.summarize.outputs.a1_ocpus_percent }}
+          A1_MEMORY_PERCENT: ${{ steps.summarize.outputs.a1_memory_percent }}
+          BLOCK_PERCENT: ${{ steps.summarize.outputs.block_percent }}
+          NETWORK_PERCENT: ${{ steps.summarize.outputs.network_percent }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "DISCORD_WEBHOOK_URL secret is not set; skipping Discord notification."
+            exit 0
+          fi
+
+          python3 - <<'PY' > "$RUNNER_TEMP/discord-payload.json"
+          import json, os
+
+          status = os.environ['STATUS']
+          colors = {'ok': 0x2ecc71, 'warning': 0xf1c40f, 'critical': 0xe74c3c}
+          emoji = {'ok': '🟢', 'warning': '🟡', 'critical': '🔴'}
+          payload = {
+              'username': 'OCI Instance Monitor',
+              'content': f"{emoji.get(status, '⚪')} OCI Free Tier monitor: {status.upper()} — risk {os.environ['OVERALL_RISK_PERCENT']}%",
+              'embeds': [
+                  {
+                      'title': 'OCI Free Tier Usage',
+                      'url': os.environ['RUN_URL'],
+                      'color': colors.get(status, 0x95a5a6),
+                      'description': os.environ['MESSAGE'],
+                      'fields': [
+                          {'name': 'Overall risk', 'value': f"{os.environ['OVERALL_RISK_PERCENT']}%", 'inline': True},
+                          {'name': 'A1 OCPU', 'value': f"{os.environ['A1_OCPUS']} / 4 ({os.environ['A1_OCPUS_PERCENT']}%)", 'inline': True},
+                          {'name': 'A1 Memory', 'value': f"{os.environ['A1_MEMORY_GB']} / 24 GB ({os.environ['A1_MEMORY_PERCENT']}%)", 'inline': True},
+                          {'name': 'Block + boot volumes', 'value': f"{os.environ['BLOCK_TOTAL_GB']} / 200 GB ({os.environ['BLOCK_PERCENT']}%)", 'inline': True},
+                          {'name': 'Monthly VNIC egress', 'value': f"{os.environ['VNIC_EGRESS_TIB']} / 10 TiB ({os.environ['NETWORK_PERCENT']}%)", 'inline': True},
+                          {'name': 'Usage API computed amount', 'value': os.environ['USAGE_COST'], 'inline': True},
+                      ],
+                      'footer': {'text': 'A1 at 100% means the full Always Free A1 allocation is in use, not necessarily overage.'},
+                  }
+              ],
+          }
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
+
+          curl -fsS -H 'Content-Type: application/json' \
+            -d "@$RUNNER_TEMP/discord-payload.json" \
+            "$DISCORD_WEBHOOK_URL" > /dev/null
+
+      - name: Notify Telegram when warning or critical
         if: steps.summarize.outputs.status != 'ok'
         env:
           STATUS: ${{ steps.summarize.outputs.status }}
