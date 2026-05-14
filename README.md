@@ -51,8 +51,8 @@ The **Monitor OCI Free Tier Usage** workflow checks the active Always Free risk 
 - Reads raw OCI data from Compute, Block Volume, VNIC Monitoring metrics, and Usage API.
 - Validates the computed monitor values by printing the raw instance shape rows, raw volume rows, VNIC metric subtotals, and Usage API billing-side rows in the workflow log.
 - Computes percentage-based risk for A1 OCPU, A1 memory, boot/block volume capacity, and monthly VNIC egress against Always Free limits.
-- Posts a Discord summary on every run when `DISCORD_WEBHOOK_URL` is configured, intended for a webhook created in the `#instance-monitoring` channel.
-- Fails the run on critical threshold breaches and sends a Telegram notification for warning or critical states.
+- Sends a Telegram summary on every run when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are configured.
+- Fails the run on critical threshold breaches.
 - Defaults:
   - A1 allocation critical threshold: more than 4 OCPU or 24 GB memory.
   - Boot + block volume critical threshold: more than 200 GB; warning from 180 GB.
@@ -61,7 +61,7 @@ The **Monitor OCI Free Tier Usage** workflow checks the active Always Free risk 
 
 The VNIC metric uses `VnicToNetworkBytes` from the `oci_vcn` namespace as a near-real-time traffic signal. The Usage API rows are included as the billing-side cross-check, but they can lag behind live metrics.
 
-To send every monitor result to Discord, create a webhook in the Discord `#instance-monitoring` channel and add its URL as a GitHub Actions secret named `DISCORD_WEBHOOK_URL`. The workflow cannot create the Discord channel or webhook itself; those must be configured in Discord first.
+Monitor notifications use the existing Telegram bot secrets (`TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`) and are sent on every monitor workflow run, including OK runs, so no separate Discord webhook setup is required.
 
 ## Security
 

@@ -15,12 +15,11 @@ Add these under repository **Settings -> Secrets and variables -> Actions -> New
 | `OCI_AVAILABILITY_DOMAIN` | Availability domain, for example `nHas:AP-CHUNCHEON-1-AD-1`. |
 | `OCI_SSH_PUBLIC_KEY` | One-line SSH public key, such as `ssh-ed25519 ...` or `ssh-rsa ...`. |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token. |
-| `TELEGRAM_CHAT_ID` | Telegram chat ID that receives notifications. |
-| `DISCORD_WEBHOOK_URL` | Optional Discord webhook URL for the `#instance-monitoring` channel. When set, every monitor workflow run posts a percentage-based usage summary to Discord. |
+| `TELEGRAM_CHAT_ID` | Telegram chat ID that receives notifications, including every monitor workflow run. |
 
 ## Notes
 
 - `OCI_CLI_KEY_CONTENT` must preserve all line breaks.
 - Do not store any of these values in repository files.
-- If a private key, Telegram token, or Discord webhook URL is exposed, rotate it before running the workflow.
+- If a private key or Telegram token is exposed, rotate it before running the workflow.
 

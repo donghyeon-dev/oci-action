@@ -48,8 +48,6 @@ jobs:
       OCI_COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_ID }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      # Create a Discord webhook in the #instance-monitoring channel and save it as this repository secret.
-      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       NETWORK_WARNING_TB: ${{ inputs.network_warning_tb || '8' }}
       NETWORK_CRITICAL_TB: ${{ inputs.network_critical_tb || '10' }}
       BLOCK_WARNING_GB: ${{ inputs.block_warning_gb || '180' }}
@@ -378,7 +376,7 @@ jobs:
             ${{ runner.temp }}/oci-monitor/*.exit
           retention-days: 14
 
-      - name: Notify Discord with usage percentages
+      - name: Notify Telegram with usage percentages
         if: always() && steps.summarize.outputs.status != ''
         env:
           STATUS: ${{ steps.summarize.outputs.status }}
@@ -396,73 +394,35 @@ jobs:
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
-            echo "DISCORD_WEBHOOK_URL secret is not set; skipping Discord notification."
-            exit 0
-          fi
 
-          python3 - <<'PY' > "$RUNNER_TEMP/discord-payload.json"
-          import json, os
+          python3 - <<'PY' > "$RUNNER_TEMP/telegram-message.txt"
+          import os
 
           status = os.environ['STATUS']
-          colors = {'ok': 0x2ecc71, 'warning': 0xf1c40f, 'critical': 0xe74c3c}
-          emoji = {'ok': '🟢', 'warning': '🟡', 'critical': '🔴'}
-          payload = {
-              'username': 'OCI Instance Monitor',
-              'content': f"{emoji.get(status, '⚪')} OCI Free Tier monitor: {status.upper()} — risk {os.environ['OVERALL_RISK_PERCENT']}%",
-              'embeds': [
-                  {
-                      'title': 'OCI Free Tier Usage',
-                      'url': os.environ['RUN_URL'],
-                      'color': colors.get(status, 0x95a5a6),
-                      'description': os.environ['MESSAGE'],
-                      'fields': [
-                          {'name': 'Overall risk', 'value': f"{os.environ['OVERALL_RISK_PERCENT']}%", 'inline': True},
-                          {'name': 'A1 OCPU', 'value': f"{os.environ['A1_OCPUS']} / 4 ({os.environ['A1_OCPUS_PERCENT']}%)", 'inline': True},
-                          {'name': 'A1 Memory', 'value': f"{os.environ['A1_MEMORY_GB']} / 24 GB ({os.environ['A1_MEMORY_PERCENT']}%)", 'inline': True},
-                          {'name': 'Block + boot volumes', 'value': f"{os.environ['BLOCK_TOTAL_GB']} / 200 GB ({os.environ['BLOCK_PERCENT']}%)", 'inline': True},
-                          {'name': 'Monthly VNIC egress', 'value': f"{os.environ['VNIC_EGRESS_TIB']} / 10 TiB ({os.environ['NETWORK_PERCENT']}%)", 'inline': True},
-                          {'name': 'Usage API computed amount', 'value': os.environ['USAGE_COST'], 'inline': True},
-                      ],
-                      'footer': {'text': 'A1 at 100% means the full Always Free A1 allocation is in use, not necessarily overage.'},
-                  }
-              ],
-          }
-          print(json.dumps(payload, ensure_ascii=False))
+          emoji = {'ok': '🟢', 'warning': '🟡', 'critical': '🔴'}.get(status, '⚪')
+          text = f"""{emoji} OCI Free Tier monitor: {status.upper()} — risk {os.environ['OVERALL_RISK_PERCENT']}%
+
+          {os.environ['MESSAGE']}
+
+          Overall risk: {os.environ['OVERALL_RISK_PERCENT']}%
+          A1 OCPU: {os.environ['A1_OCPUS']} / 4 ({os.environ['A1_OCPUS_PERCENT']}%)
+          A1 Memory: {os.environ['A1_MEMORY_GB']} / 24 GB ({os.environ['A1_MEMORY_PERCENT']}%)
+          Block + boot volumes: {os.environ['BLOCK_TOTAL_GB']} / 200 GB ({os.environ['BLOCK_PERCENT']}%)
+          Monthly VNIC egress: {os.environ['VNIC_EGRESS_TIB']} / 10 TiB ({os.environ['NETWORK_PERCENT']}%)
+          Usage API computed amount: {os.environ['USAGE_COST']}
+
+          Note: A1 at 100% means the full Always Free A1 allocation is in use, not necessarily overage.
+          Run: {os.environ['RUN_URL']}"""
+          print('\n'.join(line.strip() for line in text.splitlines()))
           PY
-
-          curl -fsS -H 'Content-Type: application/json' \
-            -d "@$RUNNER_TEMP/discord-payload.json" \
-            "$DISCORD_WEBHOOK_URL" > /dev/null
-
-      - name: Notify Telegram when warning or critical
-        if: steps.summarize.outputs.status != 'ok'
-        env:
-          STATUS: ${{ steps.summarize.outputs.status }}
-          MESSAGE: ${{ steps.summarize.outputs.message }}
-          A1_OCPUS: ${{ steps.summarize.outputs.a1_ocpus }}
-          A1_MEMORY_GB: ${{ steps.summarize.outputs.a1_memory_gb }}
-          BLOCK_TOTAL_GB: ${{ steps.summarize.outputs.block_total_gb }}
-          VNIC_EGRESS_TIB: ${{ steps.summarize.outputs.vnic_egress_tib }}
-          USAGE_COST: ${{ steps.summarize.outputs.usage_cost }}
-          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          text="OCI Free Tier monitor: ${STATUS}
-          ${MESSAGE}
-
-          A1: ${A1_OCPUS} OCPU / ${A1_MEMORY_GB} GB
-          Block+boot volumes: ${BLOCK_TOTAL_GB} GB
-          Month VNIC egress: ${VNIC_EGRESS_TIB} TiB
-          Usage API computed amount: ${USAGE_COST}
-          Run: ${RUN_URL}"
 
           if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
             curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
               -d chat_id="$TELEGRAM_CHAT_ID" \
-              --data-urlencode text="$text" > /dev/null
+              --data-urlencode text@"$RUNNER_TEMP/telegram-message.txt" > /dev/null
           else
-            echo "$text"
+            echo "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID secret is not set; printing notification text instead."
+            cat "$RUNNER_TEMP/telegram-message.txt"
           fi
 
       - name: Fail on critical threshold breach
