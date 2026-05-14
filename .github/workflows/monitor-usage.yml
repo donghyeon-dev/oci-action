@@ -1,6 +1,12 @@
 name: Monitor OCI Free Tier Usage
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/monitor-usage.yml'
+      - 'README.md'
   schedule:
     # Run every 6 hours. GitHub schedules use UTC.
     - cron: '17 */6 * * *'
