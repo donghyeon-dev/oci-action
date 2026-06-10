@@ -76,6 +76,21 @@ jobs:
           echo "MONTH_END=$now" >> "$GITHUB_ENV"
           echo "USAGE_END=$usage_end" >> "$GITHUB_ENV"
 
+          # On the 1st of each UTC month the previous month is fully closed, so emit an
+          # extra month-end summary covering that complete billing period.
+          day_of_month="$(date -u +%d)"
+          prev_month_start="$(date -u -d "$(date -u +%Y-%m-01) -1 month" +%Y-%m-01T00:00:00Z)"
+          prev_month_end="$month_start"
+          prev_month_label="$(date -u -d "$(date -u +%Y-%m-01) -1 month" +%Y-%m)"
+          echo "PREV_MONTH_START=$prev_month_start" >> "$GITHUB_ENV"
+          echo "PREV_MONTH_END=$prev_month_end" >> "$GITHUB_ENV"
+          echo "PREV_MONTH_LABEL=$prev_month_label" >> "$GITHUB_ENV"
+          if [ "$day_of_month" = "01" ]; then
+            echo "IS_MONTH_END_REPORT=true" >> "$GITHUB_ENV"
+          else
+            echo "IS_MONTH_END_REPORT=false" >> "$GITHUB_ENV"
+          fi
+
           echo "Collecting active A1 instances..."
           "$HOME/.local/bin/oci" compute instance list \
             --compartment-id "$OCI_COMPARTMENT_ID" \
@@ -129,6 +144,30 @@ jobs:
             printf '{"data":[]}' > "$RUNNER_TEMP/oci-monitor/usage-api.json"
           fi
 
+          if [ "${IS_MONTH_END_REPORT:-false}" = "true" ]; then
+            echo "Collecting Usage API rows for the closed previous month ($PREV_MONTH_LABEL)..."
+            set +e
+            "$HOME/.local/bin/oci" usage-api usage-summary request-summarized-usages \
+              --tenant-id "$OCI_CLI_TENANCY" \
+              --time-usage-started "$PREV_MONTH_START" \
+              --time-usage-ended "$PREV_MONTH_END" \
+              --granularity MONTHLY \
+              --query-type USAGE \
+              --group-by '["service","skuName","unit","resourceId"]' \
+              --is-aggregate-by-time true \
+              --output json \
+              > "$RUNNER_TEMP/oci-monitor/usage-api-prev.json" \
+              2> "$RUNNER_TEMP/oci-monitor/usage-api-prev.err"
+            prev_usage_exit=$?
+            set -e
+            echo "$prev_usage_exit" > "$RUNNER_TEMP/oci-monitor/usage-api-prev.exit"
+            if [ "$prev_usage_exit" -ne 0 ]; then
+              echo "::warning::Previous-month Usage API query failed."
+              sed -n '1,80p' "$RUNNER_TEMP/oci-monitor/usage-api-prev.err" || true
+              printf '{"data":[]}' > "$RUNNER_TEMP/oci-monitor/usage-api-prev.json"
+            fi
+          fi
+
       - name: Summarize and validate monitor values against raw OCI data
         id: summarize
         shell: python
@@ -142,6 +181,20 @@ jobs:
           compartment_id = os.environ['OCI_COMPARTMENT_ID']
           month_start = os.environ['MONTH_START']
           month_end = os.environ['MONTH_END']
+          is_month_end_report = os.environ.get('IS_MONTH_END_REPORT', 'false') == 'true'
+          prev_month_start = os.environ.get('PREV_MONTH_START', '')
+          prev_month_end = os.environ.get('PREV_MONTH_END', '')
+          prev_month_label = os.environ.get('PREV_MONTH_LABEL', '')
+
+          def parse_utc(value):
+              return datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+          def period_label(start, end):
+              # Human-readable aggregation window, e.g. "6/1~6/10".
+              s, e = parse_utc(start), parse_utc(end)
+              return f"{s.month}/{s.day}~{e.month}/{e.day}"
+
+          current_period_label = period_label(month_start, month_end)
 
           def load_json(path, default):
               try:
@@ -200,50 +253,66 @@ jobs:
           # VnicToNetworkBytes is the raw OCI Monitoring metric for bytes sent by each VNIC.
           # This is used as a near-real-time approximation for monthly outbound traffic.
           # The Usage API cost/usage rows below are kept as the billing-side cross-check.
-          vnic_egress_bytes = 0.0
-          vnic_metric_rows = []
-          for vnic_id in vnic_ids:
-              query = f'VnicToNetworkBytes[1h]{{resourceId = "{vnic_id}"}}.sum()'
-              data = run_json([
-                  'monitoring', 'metric-data', 'summarize-metrics-data',
-                  '--compartment-id', compartment_id,
-                  '--namespace', 'oci_vcn',
-                  '--query-text', query,
-                  '--start-time', month_start,
-                  '--end-time', month_end,
-                  '--resolution', '1h',
-                  '--output', 'json'
-              ]).get('data', [])
-              subtotal = 0.0
-              for series in data:
-                  for point in series.get('aggregated-datapoints', []) or []:
-                      subtotal += num(point.get('value'))
-              vnic_metric_rows.append({'vnic_id': vnic_id, 'egress_bytes': subtotal})
-              vnic_egress_bytes += subtotal
+          def sum_vnic_egress(start, end):
+              total = 0.0
+              rows = []
+              for vnic_id in vnic_ids:
+                  query = f'VnicToNetworkBytes[1h]{{resourceId = "{vnic_id}"}}.sum()'
+                  data = run_json([
+                      'monitoring', 'metric-data', 'summarize-metrics-data',
+                      '--compartment-id', compartment_id,
+                      '--namespace', 'oci_vcn',
+                      '--query-text', query,
+                      '--start-time', start,
+                      '--end-time', end,
+                      '--resolution', '1h',
+                      '--output', 'json'
+                  ]).get('data', [])
+                  subtotal = 0.0
+                  for series in data:
+                      for point in series.get('aggregated-datapoints', []) or []:
+                          subtotal += num(point.get('value'))
+                  rows.append({'vnic_id': vnic_id, 'egress_bytes': subtotal})
+                  total += subtotal
+              return total, rows
 
-          usage_exit = int((temp / 'usage-api.exit').read_text().strip() or '1')
-          usage_obj = load_json(temp / 'usage-api.json', {'data': []})
-          usage_raw = usage_obj.get('data', [])
-          if isinstance(usage_raw, dict):
-              usage_raw = usage_raw.get('items') or usage_raw.get('usage') or []
-          if not isinstance(usage_raw, list):
-              usage_raw = []
-          usage_rows = []
-          outbound_usage_quantity = 0.0
-          usage_cost = 0.0
-          for row in usage_raw:
-              if not isinstance(row, dict):
-                  continue
-              service = str(row.get('service') or '')
-              sku = str(row.get('sku-name') or row.get('skuName') or '')
-              unit = str(row.get('unit') or '')
-              qty = num(row.get('computed-quantity') or row.get('computedQuantity') or row.get('quantity'))
-              cost = num(row.get('computed-amount') or row.get('computedAmount'))
-              usage_cost += cost
-              text = f'{service} {sku} {unit}'.lower()
-              if 'outbound' in text or 'data transfer' in text:
-                  outbound_usage_quantity += qty
-                  usage_rows.append({'service': service, 'sku': sku, 'unit': unit, 'quantity': qty, 'cost': cost})
+          vnic_egress_bytes, vnic_metric_rows = sum_vnic_egress(month_start, month_end)
+
+          def parse_usage(json_path, exit_path):
+              exit_code = 1
+              try:
+                  exit_code = int((temp / exit_path).read_text().strip() or '1')
+              except Exception:
+                  pass
+              obj = load_json(temp / json_path, {'data': []})
+              raw = obj.get('data', [])
+              if isinstance(raw, dict):
+                  raw = raw.get('items') or raw.get('usage') or []
+              if not isinstance(raw, list):
+                  raw = []
+              rows = []
+              outbound_quantity = 0.0
+              cost_total = 0.0
+              for row in raw:
+                  if not isinstance(row, dict):
+                      continue
+                  service = str(row.get('service') or '')
+                  sku = str(row.get('sku-name') or row.get('skuName') or '')
+                  unit = str(row.get('unit') or '')
+                  qty = num(row.get('computed-quantity') or row.get('computedQuantity') or row.get('quantity'))
+                  cost = num(row.get('computed-amount') or row.get('computedAmount'))
+                  cost_total += cost
+                  text = f'{service} {sku} {unit}'.lower()
+                  if 'outbound' in text or 'data transfer' in text:
+                      outbound_quantity += qty
+                      rows.append({'service': service, 'sku': sku, 'unit': unit, 'quantity': qty, 'cost': cost})
+              return {'exit': exit_code, 'rows': rows, 'outbound_quantity': outbound_quantity, 'cost': cost_total}
+
+          current_usage = parse_usage('usage-api.json', 'usage-api.exit')
+          usage_exit = current_usage['exit']
+          usage_rows = current_usage['rows']
+          outbound_usage_quantity = current_usage['outbound_quantity']
+          usage_cost = current_usage['cost']
 
           def pct(used, limit):
               limit = num(limit)
@@ -263,7 +332,7 @@ jobs:
           overall_risk_percent = max(a1_ocpus_percent, a1_memory_percent, block_percent, network_percent)
 
           summary = {
-              'period_utc': {'start': month_start, 'end': month_end},
+              'period_utc': {'start': month_start, 'end': month_end, 'label': current_period_label},
               'risk': {
                   'overall_percent': overall_risk_percent,
                   'a1_ocpus_percent': a1_ocpus_percent,
@@ -352,6 +421,23 @@ jobs:
           if not messages:
               messages.append('All monitored values are within configured thresholds.')
 
+          # Month-end closing report: on the 1st of the month, compute the fully closed
+          # previous month so the daily cadence is complemented by a final billing summary.
+          prev_outputs = {}
+          if is_month_end_report:
+              prev_usage = parse_usage('usage-api-prev.json', 'usage-api-prev.exit')
+              prev_vnic_bytes, _ = sum_vnic_egress(prev_month_start, prev_month_end)
+              prev_tib = prev_vnic_bytes / (1024 ** 4)
+              prev_outputs = {
+                  'prev_month_label': prev_month_label,
+                  'prev_vnic_egress_tib': f"{prev_tib:.6f}",
+                  'prev_usage_cost': prev_usage['cost'],
+                  'prev_outbound_quantity': prev_usage['outbound_quantity'],
+              }
+              print('=== MONTH-END CLOSING REPORT ===')
+              print(f"Previous month {prev_month_label}: VNIC egress {prev_tib:.6f} TiB, "
+                    f"Usage API cost {prev_usage['cost']}, outbound qty {prev_usage['outbound_quantity']}")
+
           with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
               fh.write(f"status={status}\n")
               fh.write(f"a1_ocpus={a1_ocpus}\n")
@@ -364,6 +450,10 @@ jobs:
               fh.write(f"a1_memory_percent={a1_memory_percent:.1f}\n")
               fh.write(f"block_percent={block_percent:.1f}\n")
               fh.write(f"network_percent={network_percent:.3f}\n")
+              fh.write(f"period_label={current_period_label}\n")
+              fh.write(f"month_end_report={'true' if is_month_end_report else 'false'}\n")
+              for key, value in prev_outputs.items():
+                  fh.write(f"{key}={value}\n")
               fh.write('message<<EOF\n' + '\n'.join(messages) + '\nEOF\n')
 
       - name: Upload raw monitor data
@@ -391,6 +481,7 @@ jobs:
           A1_MEMORY_PERCENT: ${{ steps.summarize.outputs.a1_memory_percent }}
           BLOCK_PERCENT: ${{ steps.summarize.outputs.block_percent }}
           NETWORK_PERCENT: ${{ steps.summarize.outputs.network_percent }}
+          PERIOD_LABEL: ${{ steps.summarize.outputs.period_label }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -415,13 +506,13 @@ jobs:
 
           {message_ko}
 
-          📊 현재 사용량
+          📊 현재 사용량 (집계 구간: 이번 달 {env('PERIOD_LABEL')} 누적, UTC 기준)
           - 전체 위험도: {env('OVERALL_RISK_PERCENT')}%
-          - A1 OCPU: {env('A1_OCPUS')} / {env('A1_FREE_OCPUS')} ({env('A1_OCPUS_PERCENT')}%)
-          - A1 메모리: {env('A1_MEMORY_GB')} / {env('A1_FREE_MEMORY_GB')} GB ({env('A1_MEMORY_PERCENT')}%)
-          - 부트+블록 볼륨: {env('BLOCK_TOTAL_GB')} / {env('BLOCK_FREE_GB')} GB ({env('BLOCK_PERCENT')}%)
-          - 월간 VNIC 송신량: {env('VNIC_EGRESS_TIB')} / 10 TiB ({env('NETWORK_PERCENT')}%)
-          - Usage API 계산 금액: {env('USAGE_COST')}
+          - A1 OCPU: {env('A1_OCPUS')} / {env('A1_FREE_OCPUS')} ({env('A1_OCPUS_PERCENT')}%) — 현재 점유량
+          - A1 메모리: {env('A1_MEMORY_GB')} / {env('A1_FREE_MEMORY_GB')} GB ({env('A1_MEMORY_PERCENT')}%) — 현재 점유량
+          - 부트+블록 볼륨: {env('BLOCK_TOTAL_GB')} / {env('BLOCK_FREE_GB')} GB ({env('BLOCK_PERCENT')}%) — 현재 점유량
+          - 월간 VNIC 송신량 ({env('PERIOD_LABEL')} 누적): {env('VNIC_EGRESS_TIB')} / 10 TiB ({env('NETWORK_PERCENT')}%)
+          - Usage API 계산 금액 ({env('PERIOD_LABEL')} 누적): {env('USAGE_COST')}
 
           🚧 임계치
           - A1 위험: {env('A1_FREE_OCPUS')} OCPU 초과 또는 {env('A1_FREE_MEMORY_GB')} GB 메모리 초과
@@ -443,6 +534,55 @@ jobs:
           else
             echo "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID secret is not set; printing notification text instead."
             cat "$RUNNER_TEMP/telegram-message.txt"
+          fi
+
+      - name: Notify Telegram with month-end closing report
+        if: always() && steps.summarize.outputs.month_end_report == 'true'
+        env:
+          PREV_MONTH_LABEL: ${{ steps.summarize.outputs.prev_month_label }}
+          PREV_VNIC_EGRESS_TIB: ${{ steps.summarize.outputs.prev_vnic_egress_tib }}
+          PREV_USAGE_COST: ${{ steps.summarize.outputs.prev_usage_cost }}
+          PREV_OUTBOUND_QUANTITY: ${{ steps.summarize.outputs.prev_outbound_quantity }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY' > "$RUNNER_TEMP/telegram-month-end.txt"
+          import os
+
+          def env(name, default=''):
+              return os.environ.get(name, default)
+
+          cost = env('PREV_USAGE_COST', '0')
+          try:
+              billed = float(cost) > 0
+          except ValueError:
+              billed = False
+          verdict = '🔴 과금 발생 — 확인 필요' if billed else '🟢 과금 없음 (무료 티어 내)'
+
+          text = f"""📅 OCI 무료 티어 월간 마감 리포트: {env('PREV_MONTH_LABEL')}
+
+          지난달 결산입니다. ({env('PREV_MONTH_LABEL')} 전체, UTC 기준)
+
+          📊 월간 누적 사용량
+          - VNIC 송신량: {env('PREV_VNIC_EGRESS_TIB')} / 10 TiB
+          - Usage API 아웃바운드 수량: {env('PREV_OUTBOUND_QUANTITY')}
+          - Usage API 계산 금액: {cost}
+
+          🧾 결산 판정: {verdict}
+
+          참고: VNIC 송신량은 현재 활성 VNIC 기준 추정치이며, 청구의 기준은 Usage API 계산 금액입니다.
+          실행 로그: {env('RUN_URL')}"""
+          print('\n'.join(line.strip() for line in text.splitlines()))
+          PY
+
+          if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+            curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="$TELEGRAM_CHAT_ID" \
+              --data-urlencode text@"$RUNNER_TEMP/telegram-month-end.txt" > /dev/null
+          else
+            echo "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID secret is not set; printing month-end report instead."
+            cat "$RUNNER_TEMP/telegram-month-end.txt"
           fi
 
       - name: Fail on critical threshold breach
