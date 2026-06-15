@@ -467,7 +467,7 @@ jobs:
           retention-days: 14
 
       - name: Notify Telegram with usage percentages
-        if: always() && steps.summarize.outputs.status != ''
+        if: always() && github.event_name != 'pull_request' && steps.summarize.outputs.status != ''
         env:
           STATUS: ${{ steps.summarize.outputs.status }}
           MESSAGE: ${{ steps.summarize.outputs.message }}
@@ -537,7 +537,7 @@ jobs:
           fi
 
       - name: Notify Telegram with month-end closing report
-        if: always() && steps.summarize.outputs.month_end_report == 'true'
+        if: always() && github.event_name != 'pull_request' && steps.summarize.outputs.month_end_report == 'true'
         env:
           PREV_MONTH_LABEL: ${{ steps.summarize.outputs.prev_month_label }}
           PREV_VNIC_EGRESS_TIB: ${{ steps.summarize.outputs.prev_vnic_egress_tib }}
@@ -586,7 +586,7 @@ jobs:
           fi
 
       - name: Fail on critical threshold breach
-        if: steps.summarize.outputs.status == 'critical'
+        if: github.event_name != 'pull_request' && steps.summarize.outputs.status == 'critical'
         run: |
           echo "::error::OCI Free Tier monitor detected a critical threshold breach."
           exit 1
