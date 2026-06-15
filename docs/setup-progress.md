@@ -44,8 +44,8 @@ Cloud Shell에서 사용하던 스크립트 기준 대응 관계:
 | `AVAILABILITY_DOMAIN` | `OCI_AVAILABILITY_DOMAIN` | 예: `nHas:AP-CHUNCHEON-1-AD-1`. |
 | `SSH_PUBLIC_KEY` | `OCI_SSH_PUBLIC_KEY` | 한 줄짜리 public key 전체. |
 | `DISPLAY_NAME` | workflow 내부 `dh-server-a1` | 현재 workflow는 고정값 사용. 필요하면 Secret으로 분리 가능. |
-| `OCPUS` | workflow 내부 `1` | Always Free 안전값으로 고정. |
-| `MEMORY` | workflow 내부 `6` | Always Free 안전값으로 고정. |
+| `OCPUS` | workflow 내부 `1` | Launch workflow 안전값. Downscale workflow 기본 목표는 현재 Always Free 허용량 `2`. |
+| `MEMORY` | workflow 내부 `6` | Launch workflow 안전값. Downscale workflow 기본 목표는 현재 Always Free 허용량 `12`. |
 
 확인 결과: 사용자가 보낸 스크립트는 값이 비워져 있어 실제 OCID 값 자체는 유추할 수 없음. 다만 기존 Cloud Shell에서 실제로 돌리던 원본 스크립트나 OCI CLI config/history에 값이 남아 있다면 위 대응 관계대로 GitHub Secrets에 옮기면 됨.
 

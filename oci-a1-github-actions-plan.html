@@ -828,12 +828,12 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC3...
 <pre data-lang="powershell"><code><span class="comment"># Windows PowerShell</span>
 ssh -i $HOME\.ssh\oci_a1 ubuntu@&lt;public-ip&gt;</code></pre>
 
-<h3>6-3. OCPU/메모리 확장 (선택)</h3>
-<p>1 OCPU/6GB로 잡았다면 콘솔에서 4 OCPU/24GB로 확장 가능:</p>
+<h3>6-3. OCPU/메모리 조정</h3>
+<p>Oracle Always Free 문서 기준 A1 허용량은 Always Free 테넌시에서 2 OCPU/12GB에 해당합니다. 이전 4 OCPU/24GB 확장 안내는 사용하지 않습니다:</p>
 <ol>
   <li>인스턴스 페이지 → <strong>Edit</strong></li>
-  <li>OCPU: 4, Memory: 24 입력</li>
-  <li>저장 → 인스턴스 자동 재부팅</li>
+  <li>OCPU: 2, Memory: 12 입력</li>
+  <li>저장 → 필요 시 인스턴스 자동 재부팅</li>
 </ol>
 
 <h3>6-4. 기존 OpenClaw 가이드로 복귀</h3>

@@ -14,7 +14,7 @@ The workflow is based on `oci-a1-github-actions-plan.html` and is designed to:
 ## Files
 
 - `.github/workflows/launch.yml` - scheduled and manually triggerable launch workflow.
-- `.github/workflows/upscale.yml` - scheduled and manually triggerable workflow that resizes the existing A1 instance to the Always Free maximum (4 OCPU / 24 GB) or a custom target.
+- `.github/workflows/downscale.yml` - scheduled and manually triggerable workflow that resizes the existing A1 instance to the current Always Free allowance (2 OCPU / 12 GB) or a custom target.
 - `.github/workflows/monitor-usage.yml` - scheduled and manually triggerable workflow that monitors A1 shape allocation, boot/block volume capacity, monthly VNIC egress, and Usage API cost rows against Always Free thresholds.
 - `docs/secrets.md` - required GitHub repository secrets.
 - `oci-a1-github-actions-plan.html` - original implementation plan.
@@ -29,19 +29,19 @@ The workflow is based on `oci-a1-github-actions-plan.html` and is designed to:
 
 The scheduled workflow will continue every 15 minutes until it succeeds or disables itself on a limit error.
 
-## Upscaling to the Always Free maximum
+## Downscaling to the current Always Free allowance
 
-After the launch workflow has created the instance at the safe minimum (1 OCPU / 6 GB), the **Upscale OCI A1 Instance** workflow resizes it to the Always Free maximum.
+After the launch workflow has created the instance, the **Downscale OCI A1 Instance** workflow resizes it to Oracle's current documented Always Free A1 allowance.
 
 - Runs every 30 minutes on schedule and is also manually triggerable from the Actions tab.
-- Defaults to `ocpus=4` and `memory_in_gbs=24`, which fully consumes the Always Free A1 quota for a single instance. Manual runs accept overrides through workflow inputs.
+- Defaults to `ocpus=2` and `memory_in_gbs=12`, matching Oracle's current Always Free A1 allowance for Always Free tenancies. Manual runs accept overrides through workflow inputs.
 - Looks up the existing `VM.Standard.A1.Flex` instance in `OCI_COMPARTMENT_ID`, calls `oci compute instance update --shape-config`, then polls until the new shape is reported and the instance is back in `RUNNING`.
-- Disables itself after a successful resize, when the instance is already at the target shape, or on a `LimitExceeded` error. Capacity and rate-limit failures are retried on the next schedule.
+- Disables itself after a successful resize/downscale, when the instance is already at the target shape, or on a `LimitExceeded` error. Capacity and rate-limit failures are retried on the next schedule.
 - Sends Telegram notifications mirroring the launch workflow: success with before/after shape, retryable failures with a reason hint, and permanent disable on `LimitExceeded`.
 
 OCI applies Flex shape changes online when possible and otherwise reboots the instance, so expect a brief reboot and short SSH downtime.
 
-GitHub Actions only runs scheduled workflows from the repository's default branch, so the cron schedule activates once `upscale.yml` is merged into the default branch.
+GitHub Actions only runs scheduled workflows from the repository's default branch, so the cron schedule activates once `downscale.yml` is merged into the default branch.
 
 ## Monitoring Always Free usage
 
@@ -54,10 +54,12 @@ The **Monitor OCI Free Tier Usage** workflow checks the active Always Free risk 
 - Sends a Korean Telegram summary with usage percentages and thresholds on every run when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are configured.
 - Fails the run on critical threshold breaches.
 - Defaults:
-  - A1 allocation critical threshold: more than 4 OCPU or 24 GB memory.
+  - A1 allocation critical threshold: more than 2 OCPU or 12 GB memory.
   - Boot + block volume critical threshold: more than 200 GB; warning from 180 GB.
   - Monthly VNIC egress warning: 8 TiB; critical: 10 TiB.
   - Usage API computed amount greater than zero is critical.
+
+Oracle reference checked: the Always Free Resources page states that OCI Ampere A1 Compute provides the first 1,500 OCPU hours and 9,000 GB hours per month, which Oracle describes for Always Free tenancies as equivalent to 2 OCPUs and 12 GB of memory.
 
 The VNIC metric uses `VnicToNetworkBytes` from the `oci_vcn` namespace as a near-real-time traffic signal. The Usage API rows are included as the billing-side cross-check, but they can lag behind live metrics.
 
