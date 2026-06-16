@@ -51,8 +51,8 @@ jobs:
       NETWORK_WARNING_TB: ${{ inputs.network_warning_tb || '8' }}
       NETWORK_CRITICAL_TB: ${{ inputs.network_critical_tb || '10' }}
       BLOCK_WARNING_GB: ${{ inputs.block_warning_gb || '180' }}
-      A1_FREE_OCPUS: '4'
-      A1_FREE_MEMORY_GB: '24'
+      A1_FREE_OCPUS: '2'
+      A1_FREE_MEMORY_GB: '12'
       BLOCK_FREE_GB: '200'
 
     steps:
@@ -339,7 +339,7 @@ jobs:
                   'a1_memory_percent': a1_memory_percent,
                   'block_storage_percent': block_percent,
                   'network_egress_percent': network_percent,
-                  'note': 'Percentages compare current monitored usage with Always Free thresholds. A1 at 100% means the full free A1 allocation is in use, not overage.',
+                  'note': 'Percentages compare current monitored usage with Always Free thresholds. A1 at 100% means the current documented free A1 allowance is fully allocated, not overage by itself.',
               },
               'a1': {
                   'active_instance_count': len(a1_instances),
@@ -467,7 +467,7 @@ jobs:
           retention-days: 14
 
       - name: Notify Telegram with usage percentages
-        if: always() && steps.summarize.outputs.status != ''
+        if: always() && github.event_name != 'pull_request' && steps.summarize.outputs.status != ''
         env:
           STATUS: ${{ steps.summarize.outputs.status }}
           MESSAGE: ${{ steps.summarize.outputs.message }}
@@ -537,7 +537,7 @@ jobs:
           fi
 
       - name: Notify Telegram with month-end closing report
-        if: always() && steps.summarize.outputs.month_end_report == 'true'
+        if: always() && github.event_name != 'pull_request' && steps.summarize.outputs.month_end_report == 'true'
         env:
           PREV_MONTH_LABEL: ${{ steps.summarize.outputs.prev_month_label }}
           PREV_VNIC_EGRESS_TIB: ${{ steps.summarize.outputs.prev_vnic_egress_tib }}
@@ -586,7 +586,7 @@ jobs:
           fi
 
       - name: Fail on critical threshold breach
-        if: steps.summarize.outputs.status == 'critical'
+        if: github.event_name != 'pull_request' && steps.summarize.outputs.status == 'critical'
         run: |
           echo "::error::OCI Free Tier monitor detected a critical threshold breach."
           exit 1

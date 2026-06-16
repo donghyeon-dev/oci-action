@@ -1,6 +1,12 @@
-name: Upscale OCI A1 Instance
+name: Downscale OCI A1 Instance
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/downscale.yml'
+      - 'README.md'
   schedule:
     # Every 30 minutes, mirrors the launch workflow cadence so capacity
     # or rate-limit failures retry quietly until the resize sticks.
@@ -8,14 +14,14 @@ on:
   workflow_dispatch:
     inputs:
       ocpus:
-        description: 'Target OCPUs (Always Free max: 4)'
+        description: 'Target OCPUs (Always Free allowance: 2)'
         required: false
-        default: '4'
+        default: '2'
         type: string
       memory_in_gbs:
-        description: 'Target memory in GBs (Always Free max: 24)'
+        description: 'Target memory in GBs (Always Free allowance: 12)'
         required: false
-        default: '24'
+        default: '12'
         type: string
 
 permissions:
@@ -23,11 +29,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: oci-a1-upscale
+  group: oci-a1-downscale
   cancel-in-progress: false
 
 jobs:
-  upscale:
+  downscale:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     env:
@@ -37,9 +44,9 @@ jobs:
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
       # Schedule runs do not pass workflow_dispatch inputs, so fall back
-      # to the Always Free maximum.
-      TARGET_OCPUS: ${{ inputs.ocpus || '4' }}
-      TARGET_MEMORY: ${{ inputs.memory_in_gbs || '24' }}
+      # to the current Always Free allowance.
+      TARGET_OCPUS: ${{ inputs.ocpus || '2' }}
+      TARGET_MEMORY: ${{ inputs.memory_in_gbs || '12' }}
 
     steps:
       - name: Find A1 instance ID
@@ -104,7 +111,7 @@ jobs:
           CUR_O: ${{ steps.current.outputs.ocpus }}
           CUR_M: ${{ steps.current.outputs.memory }}
         run: |
-          message="OCI A1 instance already at target shape (${CUR_O} OCPU / ${CUR_M} GB). Disabling upscale workflow."
+          message="OCI A1 instance already at target shape (${CUR_O} OCPU / ${CUR_M} GB). Disabling downscale workflow."
           if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
             curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
               -d chat_id="$TELEGRAM_CHAT_ID" \
@@ -115,7 +122,7 @@ jobs:
         if: steps.gate.outputs.skip == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow disable upscale.yml -R ${{ github.repository }}
+        run: gh workflow disable downscale.yml -R ${{ github.repository }}
 
       - name: Prepare shape-config JSON
         if: steps.gate.outputs.skip != 'true'
@@ -146,7 +153,7 @@ jobs:
           reason="Unknown update failure. Check the GitHub Actions log for the OCI ServiceError."
           if printf '%s' "$output" | grep -qi 'LimitExceeded'; then
             reason_code="limit_exceeded"
-            reason="LimitExceeded. Free tier max is 4 OCPU / 24 GB across all A1 instances."
+            reason="LimitExceeded. Always Free allowance is 2 OCPU / 12 GB across all A1 instances."
           elif printf '%s' "$output" | grep -qi 'Out of host capacity\|capacity'; then
             reason_code="capacity"
             reason="Out of host capacity for the requested shape change."
@@ -198,7 +205,7 @@ jobs:
           echo "memory=$new_memory" >> "$GITHUB_OUTPUT"
           echo "Verified: $new_ocpus OCPU, $new_memory GB"
 
-      - name: Notify on upscale success
+      - name: Notify on downscale success
         if: steps.update.outcome == 'success' && steps.verify.outcome == 'success'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -208,7 +215,7 @@ jobs:
           AFTER_O: ${{ steps.verify.outputs.ocpus }}
           AFTER_M: ${{ steps.verify.outputs.memory }}
         run: |
-          message="OCI A1 instance upscaled.
+          message="OCI A1 instance resized to current Always Free target.
           Before: ${BEFORE_O} OCPU / ${BEFORE_M} GB
           After:  ${AFTER_O} OCPU / ${AFTER_M} GB"
           if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
@@ -217,25 +224,25 @@ jobs:
               --data-urlencode text="$message" > /dev/null
           fi
 
-      - name: Disable workflow on upscale success
+      - name: Disable workflow on downscale success
         if: steps.update.outcome == 'success' && steps.verify.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow disable upscale.yml -R ${{ github.repository }}
+        run: gh workflow disable downscale.yml -R ${{ github.repository }}
 
       - name: Disable workflow on OCI limit exceeded
         if: steps.update.outputs.reason_code == 'limit_exceeded'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh workflow disable upscale.yml -R ${{ github.repository }}
+          gh workflow disable downscale.yml -R ${{ github.repository }}
           if [ -n "${{ secrets.TELEGRAM_BOT_TOKEN }}" ] && [ -n "${{ secrets.TELEGRAM_CHAT_ID }}" ]; then
             curl -fsS -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
               -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-              --data-urlencode text="OCI A1 upscale workflow disabled: LimitExceeded. Free tier max is 4 OCPU / 24 GB across all A1 instances." > /dev/null
+              --data-urlencode text="OCI A1 downscale workflow disabled: LimitExceeded. Always Free allowance is 2 OCPU / 12 GB across all A1 instances." > /dev/null
           fi
 
-      - name: Log retryable upscale failure
+      - name: Log retryable downscale failure
         if: steps.update.outcome == 'failure'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -243,9 +250,9 @@ jobs:
           REASON: ${{ steps.update.outputs.reason }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          echo "Upscale attempt failed. The schedule will retry."
+          echo "Downscale attempt failed. The schedule will retry."
 
-          message="OCI A1 upscale failed.
+          message="OCI A1 downscale failed.
           Reason: ${REASON:-See GitHub Actions log.}
           Run: $RUN_URL"
 
@@ -262,7 +269,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          message="OCI A1 upscale workflow failed before or outside the update attempt.
+          message="OCI A1 downscale workflow failed before or outside the update attempt.
           Reason: check the failed GitHub Actions step.
           Run: $RUN_URL"
 
