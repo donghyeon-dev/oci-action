@@ -1,0 +1,144 @@
+name: Resize A1 Boot Volume
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_gb:
+        description: 'Target boot volume size in GB (must be larger than current, max 200)'
+        required: true
+        default: '100'
+        type: string
+      dry_run:
+        description: 'Only print current and target size, do not resize'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oci-boot-volume-resize
+  cancel-in-progress: false
+
+jobs:
+  resize:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      OCI_COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_ID }}
+      TARGET_GB: ${{ inputs.target_gb }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      BLOCK_FREE_GB: '200'
+
+    steps:
+      - name: Initialize OCI CLI from repository secrets
+        uses: oracle-actions/run-oci-cli-command@v1.3.2
+        with:
+          command: iam region list
+          silent: true
+
+      - name: Resize boot volume
+        run: |
+          set -euo pipefail
+          # This repository is public: never print OCIDs or IPs. Only sizes and states are logged.
+          oci="$HOME/.local/bin/oci"
+
+          case "$TARGET_GB" in
+            ''|*[!0-9]*) echo "::error::target_gb must be a positive integer"; exit 1 ;;
+          esac
+
+          instance_ids="$("$oci" compute instance list \
+            --compartment-id "$OCI_COMPARTMENT_ID" \
+            --all \
+            --lifecycle-state RUNNING \
+            --query 'data[?shape==`VM.Standard.A1.Flex`].id' \
+            --output json | jq -r '.[]')"
+          instance_count="$(printf '%s\n' "$instance_ids" | grep -c . || true)"
+          echo "RUNNING VM.Standard.A1.Flex instances: $instance_count"
+          if [ "$instance_count" -ne 1 ]; then
+            echo "::error::Expected exactly 1 running A1 instance, found $instance_count"
+            exit 1
+          fi
+          instance_id="$instance_ids"
+          echo "::add-mask::$instance_id"
+
+          instance_json="$("$oci" compute instance get --instance-id "$instance_id" --output json)"
+          ad="$(jq -r '.data["availability-domain"]' <<<"$instance_json")"
+          echo "::add-mask::$ad"
+
+          boot_volume_id="$("$oci" compute boot-volume-attachment list \
+            --compartment-id "$OCI_COMPARTMENT_ID" \
+            --availability-domain "$ad" \
+            --instance-id "$instance_id" \
+            --all \
+            --output json \
+            | jq -r '[.data[] | select(.["lifecycle-state"] == "ATTACHED")] | if length == 1 then .[0]["boot-volume-id"] else empty end')"
+          if [ -z "$boot_volume_id" ]; then
+            echo "::error::Expected exactly 1 ATTACHED boot volume for the A1 instance"
+            exit 1
+          fi
+          echo "::add-mask::$boot_volume_id"
+
+          bv_json="$("$oci" bv boot-volume get --boot-volume-id "$boot_volume_id" --output json)"
+          current_gb="$(jq -r '.data["size-in-gbs"]' <<<"$bv_json")"
+          current_state="$(jq -r '.data["lifecycle-state"]' <<<"$bv_json")"
+          echo "Current boot volume size: ${current_gb} GB (state: $current_state)"
+          echo "Target boot volume size:  ${TARGET_GB} GB"
+
+          if [ "$TARGET_GB" -le "$current_gb" ]; then
+            echo "::error::target_gb ($TARGET_GB) must be larger than the current size ($current_gb)"
+            exit 1
+          fi
+          if [ "$TARGET_GB" -gt "$BLOCK_FREE_GB" ]; then
+            echo "::error::target_gb ($TARGET_GB) exceeds the ${BLOCK_FREE_GB} GB free tier"
+            exit 1
+          fi
+
+          # Sum every non-terminated boot and block volume across all availability domains.
+          total_gb=0
+          while read -r each_ad; do
+            boot_sum="$("$oci" bv boot-volume list --compartment-id "$OCI_COMPARTMENT_ID" --availability-domain "$each_ad" --all --output json \
+              | jq '[.data[]? | select(.["lifecycle-state"] != "TERMINATED" and .["lifecycle-state"] != "TERMINATING") | .["size-in-gbs"]] | add // 0')"
+            block_sum="$("$oci" bv volume list --compartment-id "$OCI_COMPARTMENT_ID" --availability-domain "$each_ad" --all --output json \
+              | jq '[.data[]? | select(.["lifecycle-state"] != "TERMINATED" and .["lifecycle-state"] != "TERMINATING") | .["size-in-gbs"]] | add // 0')"
+            total_gb=$((total_gb + boot_sum + block_sum))
+          done < <("$oci" iam availability-domain list --compartment-id "$OCI_CLI_TENANCY" --all --output json | jq -r '.data[].name')
+
+          increase_gb=$((TARGET_GB - current_gb))
+          projected_gb=$((total_gb + increase_gb))
+          echo "Current block + boot volume total: ${total_gb} GB"
+          echo "Increase: ${increase_gb} GB -> projected total: ${projected_gb} GB (limit ${BLOCK_FREE_GB} GB)"
+          if [ "$projected_gb" -gt "$BLOCK_FREE_GB" ]; then
+            echo "::error::Projected block + boot total ${projected_gb} GB exceeds the ${BLOCK_FREE_GB} GB free tier"
+            exit 1
+          fi
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run: no change made."
+            exit 0
+          fi
+
+          echo "Resizing boot volume to ${TARGET_GB} GB..."
+          "$oci" bv boot-volume update \
+            --boot-volume-id "$boot_volume_id" \
+            --size-in-gbs "$TARGET_GB" \
+            --force \
+            --wait-for-state AVAILABLE \
+            --max-wait-seconds 1200 \
+            --output json > /dev/null
+
+          bv_json="$("$oci" bv boot-volume get --boot-volume-id "$boot_volume_id" --output json)"
+          new_gb="$(jq -r '.data["size-in-gbs"]' <<<"$bv_json")"
+          new_state="$(jq -r '.data["lifecycle-state"]' <<<"$bv_json")"
+          echo "New boot volume size: ${new_gb} GB (state: $new_state)"
+          if [ "$new_gb" != "$TARGET_GB" ] || [ "$new_state" != "AVAILABLE" ]; then
+            echo "::error::Resize did not reach ${TARGET_GB} GB AVAILABLE"
+            exit 1
+          fi
+          echo "Resize complete. Grow the partition and filesystem on the instance next."
